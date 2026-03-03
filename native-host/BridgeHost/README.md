@@ -1,6 +1,6 @@
 # BridgeHost
 
-Native Messaging host scaffold for `com.tsupasswd.bridge`.
+`com.tsupasswd.bridge` の Native Messaging ホスト用スキャフォールドです。
 
 ## Build
 
@@ -8,20 +8,20 @@ Native Messaging host scaffold for `com.tsupasswd.bridge`.
 dotnet publish .\BridgeHost.csproj -c Release -r win-x64 --self-contained false
 ```
 
-Output executable:
+出力される実行ファイル:
 
 `bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.exe`
 
 ## Protocol
 
-- Input: 4-byte little-endian length + UTF-8 JSON payload
-- Output: 4-byte little-endian length + UTF-8 JSON payload
+- 入力: 4 バイト little-endian の長さ + UTF-8 JSON ペイロード
+- 出力: 4 バイト little-endian の長さ + UTF-8 JSON ペイロード
 
 ## Implement next
 
-- Replace `HandleMessage` to call PasskeyManager side APIs
-- Add request routing (register, authenticate, status, etc.)
-- Add file logging (stderr or dedicated log file)
+- `HandleMessage` を PasskeyManager 側 API を呼び出す実装に置き換える
+- リクエストのルーティングを追加する（register, authenticate, status など）
+- ファイルログ出力を追加する（stderr または専用ログファイル）
 
 ## Implemented message types
 

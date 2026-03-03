@@ -1,0 +1,4 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.tsupasswd.bridge]
+@="C:\\AppPackages\\tsupasswd_js\\native-host\\com.tsupasswd.bridge.json"

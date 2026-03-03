@@ -3,11 +3,19 @@
   "name": "tsupasswd bridge",
   "version": "0.1.0",
   "description": "Chrome extension bridge for PasskeyManager via Native Messaging.",
-  "permissions": ["nativeMessaging", "storage"],
+  "permissions": ["nativeMessaging", "storage", "activeTab"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
   "action": {
     "default_title": "tsupasswd bridge",
     "default_popup": "popup.html"

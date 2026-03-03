@@ -17,15 +17,12 @@
     th { background: #fafafa; position: sticky; top: 0; }
     .table-wrap { max-height: 180px; overflow: auto; border: 1px solid #e0e0e0; border-radius: 6px; }
     .section-title { margin-top: 10px; margin-bottom: 6px; font-size: 13px; }
-    .hidden { display: none; }
     .passkey-menu {
-      position: absolute;
-      z-index: 1000;
-      width: 336px;
+      width: 100%;
       background: #fff;
       border: 1px solid #d7d7d7;
       border-radius: 8px;
-      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
       padding: 8px;
       box-sizing: border-box;
     }
@@ -51,8 +48,9 @@
   <div class="section-title">Search</div>
   <input id="search" type="text" placeholder="Filter by title / rpId / user / id" />
 
-  <div class="passkey-menu hidden" id="passkeyMenu">
-    <div class="menu-title">Passkeys</div>
+  <div class="section-title">Passkeys 一覧</div>
+  <div class="passkey-menu" id="passkeyMenu">
+    <div class="menu-title">list_passkeys の結果</div>
     <div class="table-wrap">
       <table>
       <thead>

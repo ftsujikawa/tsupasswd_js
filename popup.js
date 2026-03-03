@@ -8,16 +8,13 @@ const payloadEl = document.getElementById("payload");
 const resultEl = document.getElementById("result");
 const rpIdFilterEl = document.getElementById("rpIdFilter");
 const searchEl = document.getElementById("search");
-const passkeyMenuEl = document.getElementById("passkeyMenu");
 const rowsEl = document.getElementById("passkeyRows");
 const pkTitleEl = document.getElementById("pkTitle");
 const pkRpIdEl = document.getElementById("pkRpId");
 const pkUserEl = document.getElementById("pkUser");
 const pkIdEl = document.getElementById("pkId");
-const allTextInputs = Array.from(document.querySelectorAll('input[type="text"]'));
 
 let lastPasskeys = [];
-let activeMenuInput = null;
 
 function setResult(value) {
   resultEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -25,52 +22,6 @@ function setResult(value) {
 
 function escapeText(v) {
   return String(v ?? "");
-}
-
-function positionPasskeyMenu(anchorEl) {
-  if (!(anchorEl instanceof HTMLElement)) {
-    return;
-  }
-
-  const bodyRect = document.body.getBoundingClientRect();
-  const anchorRect = anchorEl.getBoundingClientRect();
-  const menuWidth = 336;
-  const gap = 6;
-
-  let left = anchorRect.left - bodyRect.left;
-  left = Math.max(0, Math.min(left, document.body.clientWidth - menuWidth));
-
-  let top = anchorRect.bottom - bodyRect.top + gap;
-  const estimatedHeight = 230;
-  if (top + estimatedHeight > window.innerHeight && anchorRect.top - bodyRect.top - estimatedHeight - gap > 0) {
-    top = anchorRect.top - bodyRect.top - estimatedHeight - gap;
-  }
-
-  passkeyMenuEl.style.left = `${left}px`;
-  passkeyMenuEl.style.top = `${Math.max(0, top)}px`;
-}
-
-function showPasskeyMenu(anchorEl) {
-  if (anchorEl instanceof HTMLInputElement) {
-    activeMenuInput = anchorEl;
-  }
-  positionPasskeyMenu(anchorEl);
-  passkeyMenuEl.classList.remove("hidden");
-}
-
-function hidePasskeyMenu() {
-  passkeyMenuEl.classList.add("hidden");
-}
-
-function applyHoveredUserToActiveInput(passkey) {
-  if (!(activeMenuInput instanceof HTMLInputElement)) return;
-  const nextValue = escapeText(passkey?.user).trim();
-  if (!nextValue) return;
-  if (activeMenuInput.value === nextValue) return;
-
-  activeMenuInput.value = nextValue;
-  activeMenuInput.dispatchEvent(new Event("input", { bubbles: true }));
-  activeMenuInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function renderPasskeys() {
@@ -117,11 +68,6 @@ function renderPasskeys() {
       pkRpIdEl.value = escapeText(p?.rpId);
       pkUserEl.value = escapeText(p?.user);
     });
-
-    tr.addEventListener("mouseenter", () => {
-      applyHoveredUserToActiveInput(p);
-    });
-
     rowsEl.appendChild(tr);
   }
 }
@@ -129,6 +75,18 @@ function renderPasskeys() {
 function sendNative(payload) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ type: "native-request", payload }, (res) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      resolve(res ?? { ok: false, error: "No response" });
+    });
+  });
+}
+
+function sendNativeAwait(payload) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "native-request-await", payload }, (res) => {
       if (chrome.runtime.lastError) {
         resolve({ ok: false, error: chrome.runtime.lastError.message });
         return;
@@ -161,8 +119,14 @@ async function refreshList() {
     ...(rpId ? { rpId } : {})
   };
   payloadEl.value = JSON.stringify(payload);
-  const res = await sendNative(payload);
-  setResult(res);
+  const res = await sendNativeAwait(payload);
+  if (res?.ok && res?.payload && Array.isArray(res.payload.passkeys)) {
+    lastPasskeys = res.payload.passkeys;
+    renderPasskeys();
+    setResult({ ok: true, native: res.payload });
+    return;
+  }
+  setResult(res ?? { ok: false, error: "No response" });
 }
 
 async function initListByActiveTabUrl() {
@@ -250,25 +214,7 @@ removeBtn.addEventListener("click", async () => {
 });
 
 searchEl.addEventListener("input", () => {
-  showPasskeyMenu(searchEl);
   renderPasskeys();
-});
-
-for (const input of allTextInputs) {
-  input.addEventListener("focus", () => {
-    showPasskeyMenu(input);
-  });
-  input.addEventListener("click", () => {
-    showPasskeyMenu(input);
-  });
-}
-
-document.addEventListener("click", (event) => {
-  const target = event.target;
-  if (!(target instanceof Node)) return;
-  if (allTextInputs.some((input) => input === target)) return;
-  if (passkeyMenuEl.contains(target)) return;
-  hidePasskeyMenu();
 });
 
 chrome.runtime.onMessage.addListener((msg) => {

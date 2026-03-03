@@ -1,0 +1,5 @@
+C:\AppPackages\tsupasswd_js\native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.exe
+C:\AppPackages\tsupasswd_js\native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.dll
+C:\AppPackages\tsupasswd_js\native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.deps.json
+C:\AppPackages\tsupasswd_js\native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.runtimeconfig.json
+C:\AppPackages\tsupasswd_js\native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.pdb

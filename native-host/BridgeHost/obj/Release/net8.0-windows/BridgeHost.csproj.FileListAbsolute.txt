@@ -12,3 +12,4 @@ C:\AppPackages\tsupasswd_js\native-host\BridgeHost\obj\Release\net8.0-windows\re
 C:\AppPackages\tsupasswd_js\native-host\BridgeHost\obj\Release\net8.0-windows\tsupasswd-bridge-host.pdb
 C:\AppPackages\tsupasswd_js\native-host\BridgeHost\obj\Release\net8.0-windows\BridgeHost.genruntimeconfig.cache
 C:\AppPackages\tsupasswd_js\native-host\BridgeHost\obj\Release\net8.0-windows\ref\tsupasswd-bridge-host.dll
+C:\AppPackages\tsupasswd_js\native-host\BridgeHost\obj\Release\net8.0-windows\BridgeHost.sourcelink.json

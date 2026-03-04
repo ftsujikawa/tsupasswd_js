@@ -13,11 +13,29 @@
   let lastAuthErrorMessage = "";
   let lastAuthInfoMessage = "";
   let isMenuPinned = false;
-  let showAllPasskeys = false;
+  const currentHost = (window.location.hostname || "").toLowerCase();
+  const defaultShowAllPasskeys =
+    currentHost === "passkeys-demo.appspot.com" || currentHost.endsWith(".passkeys-demo.appspot.com");
+  let showAllPasskeys = defaultShowAllPasskeys;
   let modeToggleBtn = null;
+  const PASSKEYS_DEMO_HOOK_FLAG = "__tsupasswdPasskeysDemoHookInstalled";
+  const PASSKEYS_DEMO_HOOK_EVENT = "tsupasswd:set-preferred-passkey";
+  const PASSKEYS_DEMO_HOOK_SCRIPT_ID = "tsupasswd-passkeys-demo-hook-script";
 
   function shouldKeepMenuVisible() {
     return isMenuPinned || isAuthInProgress || Boolean(lastAuthErrorMessage);
+  }
+
+  function clickElementSimple(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el instanceof HTMLButtonElement && el.disabled) return false;
+    if (el instanceof HTMLInputElement && el.disabled) return false;
+    try {
+      el.click();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function updateModeToggleLabel() {
@@ -26,6 +44,138 @@
     modeToggleBtn.title = showAllPasskeys
       ? "全件表示中（クリックでrpId限定に戻す）"
       : "rpId限定表示中（クリックで全件表示）";
+  }
+
+  function isPasskeysDemoHost(host = currentHost) {
+    return host === "passkeys-demo.appspot.com" || host.endsWith(".passkeys-demo.appspot.com");
+  }
+
+  function isPasskeyOrgHost(host = currentHost) {
+    return host === "passkey.org" || host.endsWith(".passkey.org");
+  }
+
+  function isWebauthnHookTargetHost(host = currentHost) {
+    return (
+      isPasskeysDemoHost(host) ||
+      host === "webauthn.io" ||
+      host.endsWith(".webauthn.io") ||
+      host === "passkeys.io" ||
+      host.endsWith(".passkeys.io") ||
+      isPasskeyOrgHost(host)
+    );
+  }
+
+  function normalizeSource(source) {
+    const normalized = String(source || "").trim().toLowerCase();
+    if (normalized === "core") return "tsupasswd_core";
+    return normalized || "unknown";
+  }
+
+  function sourceDisplayName(source) {
+    const normalized = normalizeSource(source);
+    if (normalized === "windows_hello") return "windows_hello";
+    if (normalized === "tsupasswd_core") return "tsupasswd_core";
+    return normalized;
+  }
+
+  function ensurePasskeysDemoWebAuthnHook() {
+    if (!isWebauthnHookTargetHost()) return false;
+    if ((window)[PASSKEYS_DEMO_HOOK_FLAG]) return true;
+
+    if (document.getElementById(PASSKEYS_DEMO_HOOK_SCRIPT_ID)) {
+      return true;
+    }
+
+    const script = document.createElement("script");
+    script.id = PASSKEYS_DEMO_HOOK_SCRIPT_ID;
+    script.src = chrome.runtime.getURL("page-passkeys-demo-hook.js");
+    script.async = false;
+    script.addEventListener("load", () => {
+      (window)[PASSKEYS_DEMO_HOOK_FLAG] = true;
+    });
+    document.documentElement.appendChild(script);
+    return true;
+  }
+
+  function getSearchRoots() {
+    const roots = [document];
+    const stack = [document.documentElement];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!(node instanceof Element)) continue;
+      if (node.shadowRoot) {
+        roots.push(node.shadowRoot);
+        stack.push(node.shadowRoot);
+      }
+      const children = node.children;
+      for (let i = 0; i < children.length; i += 1) {
+        stack.push(children[i]);
+      }
+    }
+    return roots;
+  }
+
+  function querySelectorDeep(selector) {
+    const roots = getSearchRoots();
+    for (const root of roots) {
+      const found = root.querySelector(selector);
+      if (found instanceof HTMLElement) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  function queryAllDeep(selector) {
+    const roots = getSearchRoots();
+    const results = [];
+    for (const root of roots) {
+      const list = root.querySelectorAll(selector);
+      for (const el of list) {
+        if (el instanceof HTMLElement) {
+          results.push(el);
+        }
+      }
+    }
+    return results;
+  }
+
+  function clickElementRobust(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el instanceof HTMLButtonElement && el.disabled) return false;
+    if (el instanceof HTMLInputElement && el.disabled) return false;
+
+    const innerButton = el.shadowRoot?.querySelector("button, [role='button']");
+    const target = innerButton instanceof HTMLElement ? innerButton : el;
+    if (target instanceof HTMLButtonElement && target.disabled) return false;
+
+    try {
+      target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, composed: true }));
+      target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, composed: true }));
+      target.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+      target.click();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function setPreferredPasskeyForPage(passkey) {
+    if (!isWebauthnHookTargetHost()) return false;
+    const installed = ensurePasskeysDemoWebAuthnHook();
+    if (!installed) return false;
+
+    const id = String(passkey?.id || "").trim();
+    if (!id) return false;
+    const rpId = String(passkey?.rpId || "").trim().toLowerCase();
+    const emit = () => {
+      window.dispatchEvent(new CustomEvent(PASSKEYS_DEMO_HOOK_EVENT, { detail: { id, rpId } }));
+    };
+    emit();
+    setTimeout(emit, 100);
+    setTimeout(emit, 300);
+    return true;
   }
 
   function wait(ms) {
@@ -219,13 +369,29 @@
       e.stopPropagation();
       showAllPasskeys = !showAllPasskeys;
       updateModeToggleLabel();
-      if (activeInput) {
-        openMenuForInput(activeInput);
+      const anchor = getMenuRefreshAnchor();
+      if (anchor) {
+        openMenuForInput(anchor);
+      }
+    });
+
+    const reloadBtn = document.createElement("button");
+    reloadBtn.type = "button";
+    reloadBtn.className = "mode-toggle";
+    reloadBtn.textContent = "再読込";
+    reloadBtn.title = "一覧を再読込";
+    reloadBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const anchor = getMenuRefreshAnchor();
+      if (anchor) {
+        openMenuForInput(anchor);
       }
     });
 
     hdr.appendChild(hdrTitle);
     hdr.appendChild(modeToggleBtn);
+    hdr.appendChild(reloadBtn);
 
     listEl = document.createElement("div");
 
@@ -258,9 +424,51 @@
     return false;
   }
 
+  function findEligibleInputFromNode(node) {
+    if (!(node instanceof HTMLElement)) return null;
+    if (isEligibleInput(node)) return node;
+    if (node.shadowRoot) {
+      const inShadow = node.shadowRoot.querySelector(
+        "input, textarea, [contenteditable='true'], [role='textbox']"
+      );
+      if (isEligibleInput(inShadow)) {
+        return inShadow;
+      }
+    }
+    return null;
+  }
+
+  function findEligibleInputTarget(target, eventObj) {
+    const direct = findEligibleInputFromNode(target);
+    if (direct) {
+      return direct;
+    }
+
+    if (eventObj && typeof eventObj.composedPath === "function") {
+      const path = eventObj.composedPath();
+      for (const node of path) {
+        const found = findEligibleInputFromNode(node);
+        if (found) {
+          return found;
+        }
+      }
+    }
+
+    return null;
+  }
+
   function getFocusedEligibleInput() {
     const focused = document.activeElement;
-    return isEligibleInput(focused) ? focused : null;
+    if (isEligibleInput(focused)) {
+      return focused;
+    }
+
+    const fromActiveHost = findEligibleInputFromNode(focused);
+    if (fromActiveHost) {
+      return fromActiveHost;
+    }
+
+    return null;
   }
 
   function hideMenu(options = {}) {
@@ -323,6 +531,15 @@
   function requestNativeList(rpId) {
     return new Promise((resolve) => {
       const requestId = `cs-list-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      let settled = false;
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        resolve(payload);
+      };
+      const timeoutId = setTimeout(() => {
+        finish({ ok: false, error: "native_request_timeout", detail: "Native host response timed out" });
+      }, 8000);
 
       chrome.runtime.sendMessage(
         {
@@ -334,8 +551,9 @@
           }
         },
         (res) => {
+          clearTimeout(timeoutId);
           if (chrome.runtime.lastError) {
-            resolve({
+            finish({
               ok: false,
               error: chrome.runtime.lastError.message
             });
@@ -343,11 +561,11 @@
           }
 
           if (!res?.ok) {
-            resolve({ ok: false, error: res?.error || "native-request-failed", detail: res?.detail });
+            finish({ ok: false, error: res?.error || "native-request-failed", detail: res?.detail });
             return;
           }
 
-          resolve(res.payload ?? { ok: false, error: "empty_payload" });
+          finish(res.payload ?? { ok: false, error: "empty_payload" });
         }
       );
     });
@@ -374,6 +592,9 @@
     }
 
     let result = await requestNativeList(host);
+    if (!result?.ok) {
+      return result;
+    }
     if (result?.ok && Array.isArray(result.passkeys) && result.passkeys.length > 0) {
       return result;
     }
@@ -381,6 +602,9 @@
     if (host.startsWith("www.")) {
       const noWww = host.slice(4);
       const noWwwResult = await requestNativeList(noWww);
+      if (!noWwwResult?.ok) {
+        return noWwwResult;
+      }
       if (noWwwResult?.ok && Array.isArray(noWwwResult.passkeys) && noWwwResult.passkeys.length > 0) {
         return noWwwResult;
       }
@@ -418,12 +642,36 @@
       }
       activeInput.focus();
     }
+
+    const rootNode = typeof activeInput.getRootNode === "function" ? activeInput.getRootNode() : null;
+    const shadowHost = rootNode instanceof ShadowRoot && rootNode.host instanceof HTMLElement ? rootNode.host : null;
+
     setInputValue(activeInput, value);
     activeInput.setAttribute("value", value);
-    activeInput.dispatchEvent(new Event("input", { bubbles: true }));
+    if (shadowHost) {
+      try {
+        if ("value" in shadowHost) {
+          shadowHost.value = value;
+        }
+      } catch {}
+      shadowHost.setAttribute("value", value);
+    }
+
+    const dispatchInputEvents = (targetEl) => {
+      if (!(targetEl instanceof HTMLElement)) return;
+      targetEl.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      if (emitChange) {
+        targetEl.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      }
+    };
+
+    dispatchInputEvents(activeInput);
+    if (shadowHost && shadowHost !== activeInput) {
+      dispatchInputEvents(shadowHost);
+    }
+
     if (emitChange) {
-      activeInput.dispatchEvent(new Event("change", { bubbles: true }));
-      activeInput.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+      activeInput.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, composed: true, key: "Enter" }));
       activeInput.dispatchEvent(new Event("blur", { bubbles: true }));
     }
 
@@ -444,9 +692,13 @@
     const host = (window.location.hostname || "").toLowerCase();
     const isWebauthnIo = host === "webauthn.io" || host.endsWith(".webauthn.io");
     const isPasskeysIo = host === "passkeys.io" || host.endsWith(".passkeys.io");
-    if (!isWebauthnIo && !isPasskeysIo) {
+    const isPasskeysDemo = host === "passkeys-demo.appspot.com" || host.endsWith(".passkeys-demo.appspot.com");
+    const isPasskeyOrg = isPasskeyOrgHost(host);
+    if (!isWebauthnIo && !isPasskeysIo && !isPasskeysDemo && !isPasskeyOrg) {
       return false;
     }
+
+    const clickForAuth = isPasskeysDemo ? clickElementRobust : clickElementSimple;
 
     const candidates = isPasskeysIo
       ? [
@@ -456,6 +708,24 @@
           "button[data-action='continue']",
           "button[type='submit']",
           "button[id*='continue']"
+        ]
+      : isPasskeysDemo
+      ? [
+          "#signin",
+          "#sign-in",
+          "#login",
+          "#authenticate",
+          "button[name='signin']",
+          "button[name='login']",
+          "button[data-action='signin']",
+          "button[data-action='login']",
+          "button[id*='sign-in']",
+          "button[id*='signin']",
+          "button[id*='login']",
+          "mdui-button#signin",
+          "mdui-button#sign-in",
+          "mdui-button[id*='signin']",
+          "mdui-button[id*='login']"
         ]
       : [
           "#authenticate",
@@ -469,25 +739,49 @@
         ];
 
     for (const selector of candidates) {
-      const el = document.querySelector(selector);
-      if (el instanceof HTMLButtonElement && !el.disabled) {
-        el.click();
+      const el = querySelectorDeep(selector);
+      if (clickForAuth(el)) {
         return true;
       }
     }
 
-    const allButtons = Array.from(document.querySelectorAll("button"));
+    const allButtons = queryAllDeep("button, [role='button'], mdui-button, input[type='submit'], input[type='button']");
+    if (isPasskeysDemo) {
+      const normalizedText = (el) => String(el.textContent || "").trim().toLowerCase();
+      const oneButtonSignIn = allButtons.find((el) => normalizedText(el).includes("use one button sign-in instead"));
+      if (oneButtonSignIn && clickElementRobust(oneButtonSignIn)) {
+        setTimeout(() => {
+          const refreshed = queryAllDeep("button, [role='button'], mdui-button, input[type='submit'], input[type='button']");
+          const nextBtn = refreshed.find((el) => normalizedText(el) === "next" || normalizedText(el).includes(" next"));
+          if (nextBtn) {
+            clickElementRobust(nextBtn);
+          }
+        }, 120);
+        return true;
+      }
+
+      const nextDirect = allButtons.find((el) => normalizedText(el) === "next" || normalizedText(el).includes(" next"));
+      if (clickForAuth(nextDirect)) {
+        return true;
+      }
+    }
+
     const fallback = allButtons.find((btn) => {
       const text = (btn.textContent || "").trim().toLowerCase();
-      if (btn.disabled) return false;
+      if (btn instanceof HTMLButtonElement && btn.disabled) return false;
       if (isPasskeysIo) {
         return text.includes("continue");
       }
-      return text.includes("authenticate") || text.includes("login") || text.includes("sign in");
+      return (
+        text.includes("authenticate") ||
+        text.includes("login") ||
+        text.includes("sign in") ||
+        text.includes("sign-in") ||
+        text.includes("signin")
+      );
     });
     if (fallback) {
-      fallback.click();
-      return true;
+      return clickForAuth(fallback);
     }
 
     return false;
@@ -540,9 +834,40 @@
     return isEligibleInput(firstTextInput) ? firstTextInput : null;
   }
 
+  function getMenuRefreshAnchor() {
+    if (activeInput instanceof HTMLElement) {
+      return activeInput;
+    }
+
+    const focused = getFocusedEligibleInput();
+    if (focused instanceof HTMLElement) {
+      return focused;
+    }
+
+    const resolved = resolveTargetInput();
+    if (resolved instanceof HTMLElement) {
+      return resolved;
+    }
+
+    return null;
+  }
+
   function renderMenu(result) {
     if (!listEl) return;
     listEl.textContent = "";
+
+    const coreMeta = result?.sources?.core;
+    const windowsMeta = result?.sources?.windows_hello;
+    if (coreMeta || windowsMeta) {
+      const meta = document.createElement("div");
+      meta.className = "empty";
+      const coreCount = Number(coreMeta?.count ?? 0);
+      const windowsCount = Number(windowsMeta?.count ?? 0);
+      const coreError = coreMeta?.error ? ` (err:${coreMeta.error})` : "";
+      const windowsError = windowsMeta?.error ? ` (err:${windowsMeta.error})` : "";
+      meta.textContent = `core=${coreCount}${coreError} / windows_hello=${windowsCount}${windowsError}`;
+      listEl.appendChild(meta);
+    }
 
     if (lastAuthInfoMessage) {
       const info = document.createElement("div");
@@ -572,18 +897,48 @@
       div.className = "empty";
       div.textContent = "該当するパスキーがありません";
       listEl.appendChild(div);
+
+      if (windowsMeta && typeof windowsMeta === "object") {
+        const meta = document.createElement("div");
+        meta.className = "empty";
+        const count = Number(windowsMeta.count ?? 0);
+        const error = windowsMeta.error ? `, error: ${windowsMeta.error}` : "";
+        meta.textContent = `Windows Hello: count=${count}${error}`;
+        listEl.appendChild(meta);
+      }
       return;
     }
 
-    const baseUsers = passkeys.map((p) => String(p?.user || p?.displayName || "(no user)").trim() || "(no user)");
+    const sortedPasskeys = [...passkeys].sort((a, b) => {
+      const aSource = String(a?.source || "").toLowerCase();
+      const bSource = String(b?.source || "").toLowerCase();
+      const rank = (source) => (source === "windows_hello" ? 0 : source === "tsupasswd_core" ? 1 : 2);
+      const bySource = rank(aSource) - rank(bSource);
+      if (bySource !== 0) return bySource;
+      return String(a?.user || a?.displayName || a?.title || "").localeCompare(
+        String(b?.user || b?.displayName || b?.title || "")
+      );
+    });
+
+    const baseUsers = sortedPasskeys.map((p) => String(p?.user || p?.displayName || "(no user)").trim() || "(no user)");
     const totalByUser = new Map();
     for (const u of baseUsers) {
       totalByUser.set(u, (totalByUser.get(u) || 0) + 1);
     }
     const seenByUser = new Map();
+    let lastSource = "";
 
-    for (let i = 0; i < passkeys.length; i += 1) {
-      const p = passkeys[i];
+    for (let i = 0; i < sortedPasskeys.length; i += 1) {
+      const p = sortedPasskeys[i];
+      const sourceKey = normalizeSource(p?.source);
+      const sourceText = sourceDisplayName(sourceKey);
+      if (sourceKey !== lastSource) {
+        const sourceHeader = document.createElement("div");
+        sourceHeader.className = "empty";
+        sourceHeader.textContent = `source: ${sourceText}`;
+        listEl.appendChild(sourceHeader);
+        lastSource = sourceKey;
+      }
       const item = document.createElement("div");
       item.className = "item";
 
@@ -595,11 +950,10 @@
       const titleText = p?.title || "";
       const rpIdText = p?.rpId || "";
       const idSuffix = getCredentialIdSuffix(p?.id);
-      const sourceText = p?.source || "unknown";
 
       const t = document.createElement("div");
       t.className = "t";
-      t.textContent = userLabel;
+      t.textContent = `[${sourceText}] ${userLabel}`;
 
       const m = document.createElement("div");
       m.className = "m";
@@ -622,31 +976,81 @@
       const activateItem = async () => {
         if (isActivated) return;
         isActivated = true;
-        lastAuthInfoMessage = `選択: ${userLabel}${idSuffix ? ` / id末尾: ${idSuffix}` : ""}`;
+        const selectedSource = sourceKey || "unknown";
+        const selectedSourceLabel = sourceDisplayName(selectedSource);
+        const selectedRpId = rpIdText || "(none)";
+        lastAuthInfoMessage = `選択: ${userLabel}${idSuffix ? ` / id末尾: ${idSuffix}` : ""} / source: ${selectedSourceLabel} / rpId: ${selectedRpId}`;
         lastAuthErrorMessage = "";
         isMenuPinned = false;
         isPointerInMenu = false;
-        const applied = fillActiveInput(p, { closeMenu: true, focusInput: true, emitChange: true });
-        if (applied) {
-          triggerAuthenticateActionIfSupported();
+        const isPasskeysDemo = isPasskeysDemoHost();
+        const isPasskeyOrg = isPasskeyOrgHost();
+        if (isPasskeysDemo) {
+          const normalizeUser = (v) => String(v ?? "").trim().toLowerCase();
+          const targetInput = resolveTargetInput(activeInput);
+          const enteredUser = normalizeUser(targetInput?.value);
+          const selectedUser = normalizeUser(p?.userName || p?.userDisplayName);
+          if (enteredUser && selectedUser && enteredUser !== selectedUser) {
+            lastAuthErrorMessage = `入力ユーザー(${enteredUser})と選択パスキー(${selectedUser})が一致しません。`; 
+            if (targetInput instanceof HTMLElement) {
+              openMenuForInput(targetInput);
+            }
+            setTimeout(() => {
+              isActivated = false;
+            }, 0);
+            return;
+          }
+        }
+        const canInjectPreferredId = selectedSource !== "tsupasswd_core";
+        const hookSet = canInjectPreferredId ? setPreferredPasskeyForPage(p) : false;
+        const applied = isPasskeysDemo
+          ? false
+          : fillActiveInput(p, { closeMenu: true, focusInput: true, emitChange: true });
+        if (hookSet) {
+          lastAuthInfoMessage = `${lastAuthInfoMessage} / 選択パスキーをWebAuthnに反映`;
+        } else if (!canInjectPreferredId) {
+          lastAuthInfoMessage = `${lastAuthInfoMessage} / tsupasswd_coreはWebAuthn ID強制対象外`;
+        }
+        if (isPasskeyOrg && selectedSource === "tsupasswd_core") {
+          lastAuthInfoMessage = `${lastAuthInfoMessage} / 注意: Windowsセキュリティ画面にはtsupasswd_core名は表示されない場合があります`;
+        }
+        if (applied || hookSet) {
+          const host = (window.location.hostname || "").toLowerCase();
+          const shouldPreferSiteFlow =
+            host === "webauthn.io" ||
+            host.endsWith(".webauthn.io") ||
+            host === "passkeys.io" ||
+            host.endsWith(".passkeys.io") ||
+            host === "passkey.org" ||
+            host.endsWith(".passkey.org") ||
+            isPasskeysDemo;
+
+          let authStarted = false;
+          if (shouldPreferSiteFlow) {
+            authStarted = triggerAuthenticateActionIfSupported();
+            if (authStarted) {
+              lastAuthInfoMessage = `${lastAuthInfoMessage} / サイト認証フローを起動`;
+            } else {
+              lastAuthErrorMessage = "サイト認証フローを開始できませんでした。対象入力欄を再フォーカスして再試行してください。";
+            }
+          }
+
+          if (!shouldPreferSiteFlow && !authStarted) {
+            const authResult = await authenticateWithPasskey(p);
+            if (authResult?.ok) {
+              lastAuthInfoMessage = `${lastAuthInfoMessage} / WebAuthn get() を実行`;
+            } else {
+              const detail = authResult?.detail ? ` (${authResult.detail})` : "";
+              lastAuthErrorMessage = `WebAuthn get() 失敗: ${authResult?.error || "auth_failed"}${detail}`;
+            }
+          }
         }
         setTimeout(() => {
           isActivated = false;
         }, 0);
       };
 
-      item.addEventListener("pointerdown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        activateItem();
-      });
-      item.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        activateItem();
-      });
       item.addEventListener("click", (e) => {
-        e.preventDefault();
         e.stopPropagation();
         activateItem();
       });
@@ -658,35 +1062,99 @@
     return Boolean(result?.ok && Array.isArray(result.passkeys) && result.passkeys.length > 0);
   }
 
+  function shouldShowMenuEvenIfEmpty() {
+    const host = (window.location.hostname || "").toLowerCase();
+    return (
+      host === "webauthn.io" ||
+      host.endsWith(".webauthn.io") ||
+      host === "passkeys.io" ||
+      host.endsWith(".passkeys.io") ||
+      host === "passkey.org" ||
+      host.endsWith(".passkey.org") ||
+      host === "passkeys-demo.appspot.com" ||
+      host.endsWith(".passkeys-demo.appspot.com")
+    );
+  }
+
+  function findButtonTrigger(target, eventObj) {
+    if (target instanceof Element) {
+      const direct = target.closest("button, [role='button']");
+      if (direct instanceof HTMLElement) {
+        return direct;
+      }
+    }
+
+    if (eventObj && typeof eventObj.composedPath === "function") {
+      const path = eventObj.composedPath();
+      for (const node of path) {
+        if (node instanceof HTMLElement && node.matches("button, [role='button']")) {
+          return node;
+        }
+      }
+    }
+
+    return null;
+  }
+
   async function openMenuForInput(inputEl) {
-    if (!isEligibleInput(inputEl)) return;
-    activeInput = inputEl;
+    const forceShow = shouldShowMenuEvenIfEmpty();
+    const eligibleInput = isEligibleInput(inputEl) ? inputEl : null;
+    if (!eligibleInput && !(forceShow && inputEl instanceof HTMLElement)) return;
+    const resolvedInput = resolveTargetInput(eligibleInput || activeInput);
+    activeInput = resolvedInput;
+    const menuAnchor =
+      (activeInput instanceof HTMLElement && isEligibleInput(activeInput) ? activeInput : null) ||
+      (inputEl instanceof HTMLElement ? inputEl : null);
+    if (!(menuAnchor instanceof HTMLElement)) return;
 
     ensureMenu();
+    if (forceShow) {
+      showMenuNear(menuAnchor);
+      if (listEl) {
+        listEl.textContent = "";
+        const loading = document.createElement("div");
+        loading.className = "empty";
+        loading.textContent = "読み込み中...";
+        listEl.appendChild(loading);
+      }
+    }
 
-    const rpId = deriveRpIdFromPage();
-    const result = await requestNativeListWithFallback(rpId);
+    let result;
+    try {
+      const rpId = deriveRpIdFromPage();
+      result = await requestNativeListWithFallback(rpId);
+    } catch (e) {
+      result = { ok: false, error: "list_fetch_failed", detail: String(e?.message || e) };
+    }
 
-    if (!hasPasskeys(result)) {
+    if (!hasPasskeys(result) && !forceShow) {
       hideMenu({ force: true });
       return;
     }
 
-    showMenuNear(inputEl);
+    showMenuNear(menuAnchor);
     renderMenu(result);
+  }
+
+  function tryOpenMenuFromFocusTarget(target, eventObj) {
+    const eligibleTarget = findEligibleInputTarget(target, eventObj);
+    if (!eligibleTarget) {
+      return false;
+    }
+    if (suppressNextInputFocusOpen) {
+      suppressNextInputFocusOpen = false;
+      return true;
+    }
+    if (eligibleTarget === activeInput && menuEl && menuEl.dataset.hidden === "false") {
+      return true;
+    }
+    openMenuForInput(eligibleTarget);
+    return true;
   }
 
   document.addEventListener("focusin", (e) => {
     const target = e.target;
-    if (isEligibleInput(target)) {
-      if (suppressNextInputFocusOpen) {
-        suppressNextInputFocusOpen = false;
-        return;
-      }
-      if (target === activeInput && menuEl && menuEl.dataset.hidden === "false") {
-        return;
-      }
-      openMenuForInput(target);
+    if (tryOpenMenuFromFocusTarget(target, e)) {
       return;
     }
     if (isPointerInMenu) {
@@ -696,6 +1164,14 @@
       hideMenu();
     }
   });
+
+  document.addEventListener(
+    "focus",
+    (e) => {
+      tryOpenMenuFromFocusTarget(e.target, e);
+    },
+    true
+  );
 
   document.addEventListener("focusout", () => {
     setTimeout(() => {
@@ -715,18 +1191,27 @@
 
   document.addEventListener("mousedown", (e) => {
     const target = e.target;
-    if (!menuEl) return;
-    if (isEligibleInput(target)) {
-      openMenuForInput(target);
+    const eligibleTarget = findEligibleInputTarget(target, e);
+    if (eligibleTarget) {
+      openMenuForInput(eligibleTarget);
       return;
     }
     if (getFocusedEligibleInput()) return;
     if (isPointerInMenu) return;
-    if (target instanceof Node && menuEl.contains(target)) return;
+    if (menuEl && target instanceof Node && menuEl.contains(target)) return;
     hideMenu();
   });
 
   document.addEventListener("keydown", (e) => {
+    if (e.key === "F5" && menuEl && menuEl.dataset.hidden === "false") {
+      e.preventDefault();
+      const anchor = getMenuRefreshAnchor();
+      if (anchor) {
+        openMenuForInput(anchor);
+      }
+      return;
+    }
+
     if (e.key === "Escape") {
       if (authAbortController) {
         try {
@@ -739,4 +1224,9 @@
       hideMenu({ force: true });
     }
   });
+
+  if (shouldShowMenuEvenIfEmpty()) {
+    ensureMenu();
+    ensurePasskeysDemoWebAuthnHook();
+  }
 })();

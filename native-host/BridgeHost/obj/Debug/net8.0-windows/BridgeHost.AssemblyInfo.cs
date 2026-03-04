@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("tsupasswd-bridge-host")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a029878e534164da5f3faff032c57b56a7660079")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+19b9262628557f1b025488869eb748a6ccf4d765")]
 [assembly: System.Reflection.AssemblyProductAttribute("tsupasswd-bridge-host")]
 [assembly: System.Reflection.AssemblyTitleAttribute("tsupasswd-bridge-host")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

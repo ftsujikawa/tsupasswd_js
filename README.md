@@ -36,6 +36,8 @@ powershell -ExecutionPolicy Bypass -File C:\AppPackages\tsupasswd_js\install-nat
 - `native-host/com.tsupasswd.bridge.json` 内の `allowed_origins` の拡張機能 ID を置き換える
 - `path` が実際のブリッジ実行ファイルを指すようにする
 - ネイティブホスト実行ファイルは stdin/stdout で「長さプレフィックス付き JSON」を read/write できる必要がある
+- パスキー一覧に表示されるのは `tsupasswd_core` と `Windows Hello` から取得できた項目のみ
+- `Google パスワード マネージャー` に保存されたパスキーは、この拡張の一覧には含まれない
 
 ## Bridge host scaffold (created)
 

@@ -654,15 +654,25 @@
     }
   }
 
+  function hasPasskeys(result) {
+    return Boolean(result?.ok && Array.isArray(result.passkeys) && result.passkeys.length > 0);
+  }
+
   async function openMenuForInput(inputEl) {
     if (!isEligibleInput(inputEl)) return;
     activeInput = inputEl;
 
     ensureMenu();
-    showMenuNear(inputEl);
 
     const rpId = deriveRpIdFromPage();
     const result = await requestNativeListWithFallback(rpId);
+
+    if (!hasPasskeys(result)) {
+      hideMenu({ force: true });
+      return;
+    }
+
+    showMenuNear(inputEl);
     renderMenu(result);
   }
 

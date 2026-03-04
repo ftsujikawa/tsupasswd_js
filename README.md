@@ -8,6 +8,7 @@ Native Messaging を使って PasskeyManager と連携するための Chrome 拡
 - `background.js`: Native Messaging 接続とリレー
 - `popup.html` / `popup.js`: 簡易テスト UI
 - `native-host/com.tsupasswd.bridge.json`: ネイティブホストのマニフェストテンプレート
+- `install-native-host.ps1`: AppData 配置 + レジストリ登録スクリプト（Windows）
 
 ## Load extension
 
@@ -18,13 +19,17 @@ Native Messaging を使って PasskeyManager と連携するための Chrome 拡
 
 ## Register native host (Windows)
 
-次のレジストリキーを作成します（現在のユーザー）:
+PowerShell で次を実行します（現在のユーザー）:
 
-`HKEY_CURRENT_USER\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.tsupasswd.bridge`
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\AppPackages\tsupasswd_js\install-native-host.ps1
+```
 
-既定値（Default）を次に設定します:
+このスクリプトは以下を実行します:
 
-`C:\\AppPackages\\tsupasswd_js\\native-host\\com.tsupasswd.bridge.json`
+- bridge host 実行ファイル一式を `%LOCALAPPDATA%\tsupasswd\bridge-host` にコピー
+- `%LOCALAPPDATA%\tsupasswd\com.tsupasswd.bridge.json` を生成
+- `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.tsupasswd.bridge` を登録
 
 ## Important
 

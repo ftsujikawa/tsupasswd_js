@@ -56,3 +56,42 @@ dotnet publish C:\AppPackages\tsupasswd_js\native-host\BridgeHost\BridgeHost.csp
 ## Next step
 
 PasskeyManager の API を呼び出すために、`native-host/BridgeHost/Program.cs` にリクエストルーティングを実装します。
+
+## 変更履歴（2026-03-05）
+
+コミット: `950fca9`
+メッセージ: `Fix WebAuthn flow handling across demo and test sites`
+
+### 1) WebAuthnフック方式を改善（CSP対策）
+
+- inline script 注入を廃止し、外部スクリプト注入へ変更
+- 追加ファイル: `page-passkeys-demo-hook.js`
+- 目的: CSPによりフックが無効化される問題を回避
+
+### 2) 対応ドメインを拡張
+
+- `webauthn.io`
+- `passkeys.io`
+- `passkey.org`
+- `passkeys-demo.appspot.com`
+- `manifest.json` の `content_scripts.matches` / `web_accessible_resources.matches` を調整
+
+### 3) パスキー一覧と選択動作の改善
+
+- source表示を統一（`tsupasswd_core` / `windows_hello`）
+- 選択時メッセージに `source / rpId / id末尾` を表示
+- `passkeys-demo` では username 不一致時のガードを追加
+- `passkeys-demo` のボタン導線（`Use one button sign-in instead` → `Next`）対応を追加
+
+### 4) 認証起動ロジックの調整
+
+- 一覧選択後の認証起動をサイト別に調整
+- Shadow DOMを含むボタン探索を強化
+- `webauthn.io` 系は challenge 不整合が起きにくいよう起動方式を調整
+- `tsupasswd_core` は WebAuthn ID強制注入対象外として扱う分岐を追加
+
+### 5) 一覧取得の安定化
+
+- ネイティブ取得処理にタイムアウトを追加
+- 失敗時のフォールバック分岐を見直し、「読み込み中」で固まるケースを軽減
+- 例外時でもメニュー描画がエラー表示へ遷移するよう改善

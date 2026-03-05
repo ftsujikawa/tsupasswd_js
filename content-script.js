@@ -13,6 +13,7 @@
   let lastAuthErrorMessage = "";
   let lastAuthInfoMessage = "";
   let isMenuPinned = false;
+  let hasTriggeredInvalidatedReload = false;
   const currentHost = (window.location.hostname || "").toLowerCase();
   const defaultShowAllPasskeys =
     currentHost === "passkeys-demo.appspot.com" || currentHost.endsWith(".passkeys-demo.appspot.com");
@@ -73,8 +74,8 @@
 
   function sourceDisplayName(source) {
     const normalized = normalizeSource(source);
-    if (normalized === "windows_hello") return "windows_hello";
-    if (normalized === "tsupasswd_core") return "tsupasswd_core";
+    if (normalized === "windows_hello") return "Windows Hello（OS）";
+    if (normalized === "tsupasswd_core") return "tsupasswd_core（拡張）";
     return normalized;
   }
 
@@ -424,6 +425,98 @@
     return false;
   }
 
+  function triggerPasskeysDemoSignIn(targetInput = null) {
+    const input =
+      (isEligibleInput(targetInput) ? targetInput : null) ||
+      resolvePasskeysDemoUsernameInput() ||
+      resolveTargetInput(activeInput);
+
+    const inputRoot = input && typeof input.getRootNode === "function" ? input.getRootNode() : null;
+    const rootHost = inputRoot instanceof ShadowRoot && inputRoot.host instanceof HTMLElement ? inputRoot.host : null;
+    const form =
+      (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement ? input.form : null) ||
+      (input && typeof input.closest === "function" ? input.closest("form") : null) ||
+      (rootHost && typeof rootHost.closest === "function" ? rootHost.closest("form") : null) ||
+      querySelectorDeep("form");
+    const isUsableSubmit = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el instanceof HTMLButtonElement && el.disabled) return false;
+      if (el instanceof HTMLInputElement && el.disabled) return false;
+      return true;
+    };
+    const normalizeButtonLabel = (text) => String(text || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const isSignInLabel = (el, { requirePasskeyHint = false } = {}) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const innerButton = el.shadowRoot?.querySelector("button, [role='button']");
+      const candidates = [
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+        el.textContent,
+        el instanceof HTMLInputElement ? el.value : "",
+        innerButton instanceof HTMLElement ? innerButton.getAttribute("aria-label") : "",
+        innerButton instanceof HTMLElement ? innerButton.getAttribute("title") : "",
+        innerButton instanceof HTMLElement ? innerButton.textContent : ""
+      ];
+      const labels = candidates.map(normalizeButtonLabel).filter(Boolean);
+      return labels.some((label) => {
+        const hasSignIn = /(^|\b)sign\s*-?\s*in(\b|$)/.test(label);
+        const hasPasskeyHint = /(passkey|webauthn|security key|windows hello|fido|credential)/.test(label);
+        if (!hasSignIn && !hasPasskeyHint) return false;
+        if (requirePasskeyHint && !hasPasskeyHint) return false;
+        if (label.includes("instead")) return false;
+        if (label.includes("password")) return false;
+        return true;
+      });
+    };
+
+    if (form instanceof HTMLFormElement) {
+      const formSignInCandidates = [
+        "#signin",
+        "#sign-in",
+        "mdui-button#signin",
+        "mdui-button#sign-in"
+      ];
+
+      for (const selector of formSignInCandidates) {
+        const btn = form.querySelector(selector);
+        if (isUsableSubmit(btn) && clickElementRobust(btn)) {
+          return true;
+        }
+      }
+
+      const formTextCandidates = form.querySelectorAll("button, [role='button'], mdui-button");
+      for (const btn of formTextCandidates) {
+        if (isUsableSubmit(btn) && isSignInLabel(btn, { requirePasskeyHint: false }) && clickElementRobust(btn)) {
+          return true;
+        }
+      }
+
+      // requestSubmitはパスワード導線へ遷移することがあるため、passkeys-demoでは使わない
+    }
+
+    const strictGlobalCandidates = [
+      "#signin",
+      "#sign-in",
+      "mdui-button#signin",
+      "mdui-button#sign-in"
+    ];
+    for (const selector of strictGlobalCandidates) {
+      const btn = querySelectorDeep(selector);
+      if (isUsableSubmit(btn) && clickElementRobust(btn)) {
+        return true;
+      }
+    }
+
+    const globalTextCandidates = queryAllDeep("button, [role='button'], mdui-button");
+    for (const btn of globalTextCandidates) {
+      if (isUsableSubmit(btn) && isSignInLabel(btn, { requirePasskeyHint: true }) && clickElementRobust(btn)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function findEligibleInputFromNode(node) {
     if (!(node instanceof HTMLElement)) return null;
     if (isEligibleInput(node)) return node;
@@ -530,44 +623,87 @@
 
   function requestNativeList(rpId) {
     return new Promise((resolve) => {
+      if (!chrome?.runtime?.sendMessage) {
+        resolve({
+          ok: false,
+          error: "chrome_runtime_unavailable",
+          detail: "拡張コンテキストが無効です。タブを再読み込みしてください。"
+        });
+        return;
+      }
+
       const requestId = `cs-list-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       let settled = false;
       const finish = (payload) => {
         if (settled) return;
         settled = true;
+        if (
+          (payload?.error === "extension_context_invalidated" || payload?.error === "chrome_runtime_unavailable") &&
+          !hasTriggeredInvalidatedReload
+        ) {
+          hasTriggeredInvalidatedReload = true;
+          setTimeout(() => {
+            try {
+              window.location.reload();
+            } catch {}
+          }, 50);
+        }
         resolve(payload);
       };
       const timeoutId = setTimeout(() => {
         finish({ ok: false, error: "native_request_timeout", detail: "Native host response timed out" });
       }, 8000);
 
-      chrome.runtime.sendMessage(
-        {
-          type: "native-request-await",
-          payload: {
-            type: "list_passkeys",
-            requestId,
-            ...(rpId ? { rpId } : {})
-          }
-        },
-        (res) => {
-          clearTimeout(timeoutId);
-          if (chrome.runtime.lastError) {
-            finish({
-              ok: false,
-              error: chrome.runtime.lastError.message
-            });
-            return;
-          }
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "native-request-await",
+            payload: {
+              type: "list_passkeys",
+              requestId,
+              ...(rpId ? { rpId } : {})
+            }
+          },
+          (res) => {
+            clearTimeout(timeoutId);
+            if (chrome.runtime.lastError) {
+              const errText = String(chrome.runtime.lastError.message || "");
+              if (errText.toLowerCase().includes("extension context invalidated")) {
+                finish({
+                  ok: false,
+                  error: "extension_context_invalidated",
+                  detail: "拡張を再読み込みしたため、このタブを再読み込みしてください。"
+                });
+                return;
+              }
+              finish({
+                ok: false,
+                error: errText
+              });
+              return;
+            }
 
-          if (!res?.ok) {
-            finish({ ok: false, error: res?.error || "native-request-failed", detail: res?.detail });
-            return;
-          }
+            if (!res?.ok) {
+              finish({ ok: false, error: res?.error || "native-request-failed", detail: res?.detail });
+              return;
+            }
 
-          finish(res.payload ?? { ok: false, error: "empty_payload" });
+            finish(res.payload ?? { ok: false, error: "empty_payload" });
+          }
+        );
+      } catch (e) {
+        clearTimeout(timeoutId);
+        const detail = String(e?.message || e);
+        if (detail.toLowerCase().includes("extension context invalidated")) {
+          finish({
+            ok: false,
+            error: "extension_context_invalidated",
+            detail: "拡張を再読み込みしたため、このタブを再読み込みしてください。"
+          });
+          return;
         }
-      );
+        finish({ ok: false, error: "native_send_failed", detail });
+      }
     });
   }
 
@@ -626,7 +762,7 @@
   }
 
   function fillActiveInput(passkey, options = {}) {
-    const { closeMenu = true, focusInput = true, emitChange = true } = options;
+    const { closeMenu = true, focusInput = true, emitChange = true, emitCommitEvents = emitChange } = options;
     activeInput = resolveTargetInput(activeInput);
     if (!activeInput) return false;
     const value = passkey?.user || passkey?.id || passkey?.title || "";
@@ -670,7 +806,7 @@
       dispatchInputEvents(shadowHost);
     }
 
-    if (emitChange) {
+    if (emitCommitEvents) {
       activeInput.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, composed: true, key: "Enter" }));
       activeInput.dispatchEvent(new Event("blur", { bubbles: true }));
     }
@@ -812,7 +948,39 @@
     el.value = value;
   }
 
+  function resolvePasskeysDemoUsernameInput() {
+    const candidates = [
+      "#username",
+      "input[name='username']",
+      "input[autocomplete='username']",
+      "mdui-text-field#username",
+      "mdui-text-field[name='username']"
+    ];
+
+    for (const selector of candidates) {
+      const found = querySelectorDeep(selector);
+      if (!found) continue;
+      if (isEligibleInput(found)) {
+        return found;
+      }
+      const nested = findEligibleInputFromNode(found);
+      if (isEligibleInput(nested)) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
   function resolveTargetInput(preferredInput = null) {
+    const host = (window.location.hostname || "").toLowerCase();
+    if (isPasskeysDemoHost(host)) {
+      const passkeysDemoInput = resolvePasskeysDemoUsernameInput();
+      if (isEligibleInput(passkeysDemoInput)) {
+        return passkeysDemoInput;
+      }
+    }
+
     const focused = getFocusedEligibleInput();
     if (focused) return focused;
 
@@ -820,7 +988,6 @@
       return preferredInput;
     }
 
-    const host = (window.location.hostname || "").toLowerCase();
     if (host === "webauthn.io" || host.endsWith(".webauthn.io")) {
       const webauthnIoInput = document.querySelector("#input-email, input[type='email'], input[name='email'], input[name='username']");
       if (isEligibleInput(webauthnIoInput)) {
@@ -886,7 +1053,8 @@
     if (!result?.ok) {
       const div = document.createElement("div");
       div.className = "empty";
-      div.textContent = `取得失敗: ${result?.error || "unknown"}`;
+      const detail = result?.detail ? ` (${result.detail})` : "";
+      div.textContent = `取得失敗: ${result?.error || "unknown"}${detail}`;
       listEl.appendChild(div);
       return;
     }
@@ -985,13 +1153,24 @@
         isPointerInMenu = false;
         const isPasskeysDemo = isPasskeysDemoHost();
         const isPasskeyOrg = isPasskeyOrgHost();
+        let enteredUser = "";
+        let enteredUserRaw = "";
+        let selectedUser = "";
+        let selectedUserRaw = "";
+        let passkeysDemoTargetInput = null;
         if (isPasskeysDemo) {
           const normalizeUser = (v) => String(v ?? "").trim().toLowerCase();
-          const targetInput = resolveTargetInput(activeInput);
-          const enteredUser = normalizeUser(targetInput?.value);
-          const selectedUser = normalizeUser(p?.userName || p?.userDisplayName);
-          if (enteredUser && selectedUser && enteredUser !== selectedUser) {
-            lastAuthErrorMessage = `入力ユーザー(${enteredUser})と選択パスキー(${selectedUser})が一致しません。`; 
+          const targetInput = resolvePasskeysDemoUsernameInput() || resolveTargetInput(activeInput);
+          if (isEligibleInput(targetInput)) {
+            activeInput = targetInput;
+            passkeysDemoTargetInput = targetInput;
+          }
+          enteredUserRaw = String(targetInput?.value ?? "").trim();
+          enteredUser = normalizeUser(enteredUserRaw);
+          selectedUserRaw = String(p?.userName || p?.user || p?.displayName || p?.userDisplayName || "").trim();
+          selectedUser = normalizeUser(selectedUserRaw);
+          if (!selectedUserRaw) {
+            lastAuthErrorMessage = "選択したパスキーにユーザー名が含まれていないため、認証を開始できません。";
             if (targetInput instanceof HTMLElement) {
               openMenuForInput(targetInput);
             }
@@ -1003,8 +1182,26 @@
         }
         const canInjectPreferredId = selectedSource !== "tsupasswd_core";
         const hookSet = canInjectPreferredId ? setPreferredPasskeyForPage(p) : false;
+        const shouldFillPasskeysDemoUser = isPasskeysDemo && selectedUserRaw && enteredUserRaw !== selectedUserRaw;
         const applied = isPasskeysDemo
-          ? false
+          ? shouldFillPasskeysDemoUser
+            ? (() => {
+                const ok = fillActiveInput(
+                  { ...p, user: selectedUserRaw },
+                  { closeMenu: true, focusInput: true, emitChange: true, emitCommitEvents: false }
+                );
+                const verifyInput =
+                  (isEligibleInput(passkeysDemoTargetInput) ? passkeysDemoTargetInput : null) ||
+                  resolvePasskeysDemoUsernameInput() ||
+                  resolveTargetInput(activeInput);
+                const reflectedUser = String(verifyInput?.value ?? "").trim();
+                if (selectedUserRaw && reflectedUser !== selectedUserRaw) {
+                  lastAuthErrorMessage = "username欄への反映を確認できなかったため、認証を中止しました。";
+                  return false;
+                }
+                return ok;
+              })()
+            : false
           : fillActiveInput(p, { closeMenu: true, focusInput: true, emitChange: true });
         if (hookSet) {
           lastAuthInfoMessage = `${lastAuthInfoMessage} / 選択パスキーをWebAuthnに反映`;
@@ -1014,6 +1211,22 @@
         if (isPasskeyOrg && selectedSource === "tsupasswd_core") {
           lastAuthInfoMessage = `${lastAuthInfoMessage} / 注意: Windowsセキュリティ画面にはtsupasswd_core名は表示されない場合があります`;
         }
+        if (isPasskeysDemo) {
+          let authStarted = false;
+          if (!lastAuthErrorMessage) {
+            authStarted = triggerPasskeysDemoSignIn(passkeysDemoTargetInput);
+            lastAuthInfoMessage = authStarted
+              ? `${lastAuthInfoMessage} / サイトのSign inを起動`
+              : shouldFillPasskeysDemoUser
+              ? `${lastAuthInfoMessage} / usernameを反映しました。サイトのSign inを押してください`
+              : `${lastAuthInfoMessage} / usernameを確認してサイトのSign inを押してください`;
+          }
+          renderMenu({ ok: true, passkeys });
+          setTimeout(() => {
+            isActivated = false;
+          }, 0);
+          return;
+        }
         if (applied || hookSet) {
           const host = (window.location.hostname || "").toLowerCase();
           const shouldPreferSiteFlow =
@@ -1022,8 +1235,7 @@
             host === "passkeys.io" ||
             host.endsWith(".passkeys.io") ||
             host === "passkey.org" ||
-            host.endsWith(".passkey.org") ||
-            isPasskeysDemo;
+            host.endsWith(".passkey.org");
 
           let authStarted = false;
           if (shouldPreferSiteFlow) {

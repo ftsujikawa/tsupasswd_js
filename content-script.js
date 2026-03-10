@@ -1212,11 +1212,10 @@
           lastAuthInfoMessage = `${lastAuthInfoMessage} / 注意: Windowsセキュリティ画面にはtsupasswd_core名は表示されない場合があります`;
         }
         if (isPasskeysDemo) {
-          let authStarted = false;
           if (!lastAuthErrorMessage) {
-            authStarted = triggerPasskeysDemoSignIn(passkeysDemoTargetInput);
+            const authStarted = triggerAuthenticateActionIfSupported();
             lastAuthInfoMessage = authStarted
-              ? `${lastAuthInfoMessage} / サイトのSign inを起動`
+              ? `${lastAuthInfoMessage} / サイト認証フローを起動`
               : shouldFillPasskeysDemoUser
               ? `${lastAuthInfoMessage} / usernameを反映しました。サイトのSign inを押してください`
               : `${lastAuthInfoMessage} / usernameを確認してサイトのSign inを押してください`;
@@ -1235,19 +1234,18 @@
             host === "passkeys.io" ||
             host.endsWith(".passkeys.io") ||
             host === "passkey.org" ||
-            host.endsWith(".passkey.org");
+            host.endsWith(".passkey.org") ||
+            host === "passkeys-demo.appspot.com" ||
+            host.endsWith(".passkeys-demo.appspot.com");
 
-          let authStarted = false;
           if (shouldPreferSiteFlow) {
-            authStarted = triggerAuthenticateActionIfSupported();
+            const authStarted = triggerAuthenticateActionIfSupported();
             if (authStarted) {
               lastAuthInfoMessage = `${lastAuthInfoMessage} / サイト認証フローを起動`;
             } else {
               lastAuthErrorMessage = "サイト認証フローを開始できませんでした。対象入力欄を再フォーカスして再試行してください。";
             }
-          }
-
-          if (!shouldPreferSiteFlow && !authStarted) {
+          } else {
             const authResult = await authenticateWithPasskey(p);
             if (authResult?.ok) {
               lastAuthInfoMessage = `${lastAuthInfoMessage} / WebAuthn get() を実行`;

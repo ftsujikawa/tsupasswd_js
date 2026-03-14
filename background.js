@@ -3,7 +3,13 @@ const VAULT_HOST_NAME = "dev.happyfactory.tsupasswd_core";
 
 const ports = new Map();
 
+const NATIVE_DEBUG_DEFAULT = false;
+
 function debugNativeLog(event, detail = {}) {
+  const enabled =
+    Boolean(globalThis?.__TSUPASSWD_NATIVE_DEBUG) ||
+    (NATIVE_DEBUG_DEFAULT && globalThis?.__TSUPASSWD_NATIVE_DEBUG !== false);
+  if (!enabled) return;
   try {
     console.log("[native-debug]", event, detail);
   } catch {}

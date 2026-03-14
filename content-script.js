@@ -1276,6 +1276,54 @@
       (base instanceof HTMLInputElement || base instanceof HTMLTextAreaElement ? base.form : null) ||
       (typeof base.closest === "function" ? base.closest("form") : null);
 
+    const host = (window.location.hostname || "").trim().toLowerCase();
+    const isBandai = host === "account.bandainamcoid.com" || host.endsWith(".bandainamcoid.com");
+
+    if (isBandai) {
+      const normalizeText = (s) => String(s || "").trim().replace(/\s+/g, " ");
+      const findBandaiLoginBtn = (root) => {
+        if (!(root instanceof Document || root instanceof Element)) return null;
+        const candidates = root.querySelectorAll("button.c-button.c-button--primary, button.c-button--primary, button.c-button");
+        for (const el of candidates) {
+          if (!(el instanceof HTMLElement)) continue;
+          const t = normalizeText(el.textContent);
+          if (t === "ログイン" || t === "ログインする") {
+            return el;
+          }
+        }
+        return null;
+      };
+
+      const bandaiBtn =
+        (form instanceof HTMLFormElement ? findBandaiLoginBtn(form) : null) ||
+        findBandaiLoginBtn(document) ||
+        querySelectorDeep("button.btn-idpw-login, button[class*='btn-idpw-login']");
+
+      if (bandaiBtn instanceof HTMLElement) {
+        const attempt = () => {
+          try {
+            if (bandaiBtn instanceof HTMLButtonElement && bandaiBtn.disabled) {
+              return false;
+            }
+            if (bandaiBtn instanceof HTMLInputElement && bandaiBtn.disabled) {
+              return false;
+            }
+          } catch {}
+          return clickElementRobust(bandaiBtn);
+        };
+
+        if (attempt()) {
+          return true;
+        }
+
+        // 入力反映直後のenable待ち/描画揺れを考慮して複数回リトライ
+        setTimeout(attempt, 180);
+        setTimeout(attempt, 450);
+        setTimeout(attempt, 900);
+        return true;
+      }
+    }
+
     const candidates = [];
     const pushAll = (list) => {
       for (const el of list) {
@@ -1284,23 +1332,19 @@
     };
 
     if (form instanceof HTMLFormElement) {
-      // まずはフォーム送信を試す（submitボタンが特定できない/ラベルが取れないサイト向け）
-      try {
-        if (typeof form.requestSubmit === "function") {
-          form.requestSubmit();
-          return true;
-        }
-      } catch {}
-
       pushAll(form.querySelectorAll("button[type='submit'], input[type='submit']"));
-      pushAll(form.querySelectorAll("button, [role='button'], input[type='button'], a[role='button']"));
+      pushAll(
+        form.querySelectorAll(
+          "button, [role='button'], input[type='button'], a[role='button'], input[type='image'], a[href]"
+        )
+      );
     } else {
       // formが取れないサイト向け: 近傍のボタンだけを見る
       const container = typeof base.closest === "function" ? base.closest("section, form, div") : null;
       if (container instanceof HTMLElement) {
         pushAll(
           container.querySelectorAll(
-            "button[type='submit'], input[type='submit'], button, [role='button'], input[type='button'], a[role='button']"
+            "button[type='submit'], input[type='submit'], button, [role='button'], input[type='button'], a[role='button'], input[type='image'], a[href]"
           )
         );
       }
@@ -1374,6 +1418,11 @@
       return true;
     }
 
+    const bestBandai = prioritized.find((c) => extraHeuristicMatches(c.el, c.label, c.attrs))?.el;
+    if (bestBandai && clickElementRobust(bestBandai)) {
+      return true;
+    }
+
     // ラベル一致がない場合はsubmit系のみ押す
     const submitOnly = candidates.find((el) =>
       el instanceof HTMLButtonElement ? el.type === "submit" : el instanceof HTMLInputElement ? el.type === "submit" : false
@@ -1384,7 +1433,21 @@
 
     // 最後の手段: form/近傍で押せる候補が1つだけならそれを押す
     const unique = prioritized.length === 1 ? prioritized[0]?.el : null;
-    return Boolean(unique && clickElementRobust(unique));
+    if (unique && clickElementRobust(unique)) {
+      return true;
+    }
+
+    // それでも押せない場合だけフォーム送信を試す（サイトによってはrequestSubmitが効かないため最後に回す）
+    if (form instanceof HTMLFormElement) {
+      try {
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+          return true;
+        }
+      } catch {}
+    }
+
+    return false;
   }
 
   function findRelatedCredentialInputs(referenceInput = activeInput) {

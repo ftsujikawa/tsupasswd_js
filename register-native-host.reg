@@ -1,4 +1,13 @@
 Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.tsupasswd.bridge]
-@="C:\\AppPackages\\tsupasswd_js\\native-host\\com.tsupasswd.bridge.json"
+@="C:\\AppPackages\\passkeymanager\\tsupasswd_js\\native-host\\com.tsupasswd.bridge.json"
+
+[HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\dev.happyfactory.tsupasswd_core]
+@="C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\dev.happyfactory.tsupasswd_core.json"
+
+[HKEY_CURRENT_USER\Software\Microsoft\Edge\NativeMessagingHosts\com.tsupasswd.bridge]
+@="C:\\AppPackages\\passkeymanager\\tsupasswd_js\\native-host\\com.tsupasswd.bridge.json"
+
+[HKEY_CURRENT_USER\Software\Microsoft\Edge\NativeMessagingHosts\dev.happyfactory.tsupasswd_core]
+@="C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\dev.happyfactory.tsupasswd_core.json"

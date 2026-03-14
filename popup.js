@@ -1,4 +1,5 @@
 const connectBtn = document.getElementById("connect");
+const connectVaultBtn = document.getElementById("connectVault");
 const sendBtn = document.getElementById("send");
 const listBtn = document.getElementById("list");
 const clearBtn = document.getElementById("clear");
@@ -13,8 +14,31 @@ const pkTitleEl = document.getElementById("pkTitle");
 const pkRpIdEl = document.getElementById("pkRpId");
 const pkUserEl = document.getElementById("pkUser");
 const pkIdEl = document.getElementById("pkId");
+const vaultStatusBtn = document.getElementById("vaultStatus");
+const vaultListBtn = document.getElementById("vaultList");
+const vaultResyncBtn = document.getElementById("vaultResync");
+const vaultRowsEl = document.getElementById("vaultRows");
+const vaultTitleEl = document.getElementById("vaultTitle");
+const vaultUsernameEl = document.getElementById("vaultUsername");
+const vaultUrlEl = document.getElementById("vaultUrl");
+const vaultItemIdEl = document.getElementById("vaultItemId");
+const vaultPasswordEl = document.getElementById("vaultPassword");
+const vaultNotesEl = document.getElementById("vaultNotes");
+const vaultSaveBtn = document.getElementById("vaultSave");
+const vaultUpdateBtn = document.getElementById("vaultUpdate");
+const vaultDeleteBtn = document.getElementById("vaultDelete");
 
 let lastPasskeys = [];
+let lastVaultItems = [];
+
+function selectVaultItem(item) {
+  vaultItemIdEl.value = escapeText(item?.itemId);
+  vaultTitleEl.value = escapeText(item?.title);
+  vaultUsernameEl.value = escapeText(item?.username);
+  vaultUrlEl.value = escapeText(item?.url);
+  vaultNotesEl.value = escapeText(item?.notes);
+  vaultPasswordEl.value = "";
+}
 
 function setResult(value) {
   resultEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -24,9 +48,41 @@ function escapeText(v) {
   return String(v ?? "");
 }
 
+function tryDeriveRpIdFromUrl(rawUrl) {
+  if (!rawUrl) return "";
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return "";
+    }
+    return (url.hostname ?? "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function sendMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (res) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      resolve(res ?? { ok: false, error: "No response" });
+    });
+  });
+}
+
+function sendNative(payload, target = "passkey") {
+  return sendMessage({ type: target === "vault" ? "vault-request" : "native-request", payload, target });
+}
+
+function sendNativeAwait(payload, target = "passkey") {
+  return sendMessage({ type: target === "vault" ? "vault-request-await" : "native-request-await", payload, target });
+}
+
 function renderPasskeys() {
   const q = (searchEl.value ?? "").trim().toLowerCase();
-
   const filtered = q
     ? lastPasskeys.filter((p) => {
         const hay = [p?.title, p?.rpId, p?.user, p?.id].map((x) => String(x ?? "").toLowerCase()).join(" ");
@@ -72,42 +128,42 @@ function renderPasskeys() {
   }
 }
 
-function sendNative(payload) {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "native-request", payload }, (res) => {
-      if (chrome.runtime.lastError) {
-        resolve({ ok: false, error: chrome.runtime.lastError.message });
-        return;
-      }
-      resolve(res ?? { ok: false, error: "No response" });
-    });
-  });
-}
+function renderVaultItems() {
+  vaultRowsEl.textContent = "";
+  for (const item of lastVaultItems) {
+    const tr = document.createElement("tr");
 
-function sendNativeAwait(payload) {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "native-request-await", payload }, (res) => {
-      if (chrome.runtime.lastError) {
-        resolve({ ok: false, error: chrome.runtime.lastError.message });
-        return;
-      }
-      resolve(res ?? { ok: false, error: "No response" });
-    });
-  });
-}
+    const tdTitle = document.createElement("td");
+    tdTitle.textContent = escapeText(item?.title);
+    tr.appendChild(tdTitle);
 
-function tryDeriveRpIdFromUrl(rawUrl) {
-  if (!rawUrl) return "";
-  try {
-    const url = new URL(rawUrl);
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      return "";
-    }
-    const host = (url.hostname ?? "").trim().toLowerCase();
-    return host;
-  } catch {
-    return "";
+    const tdUsername = document.createElement("td");
+    tdUsername.textContent = escapeText(item?.username);
+    tr.appendChild(tdUsername);
+
+    const tdUrl = document.createElement("td");
+    tdUrl.textContent = escapeText(item?.url);
+    tr.appendChild(tdUrl);
+
+    const tdId = document.createElement("td");
+    tdId.textContent = escapeText(item?.itemId);
+    tr.appendChild(tdId);
+
+    tr.addEventListener("click", () => {
+      selectVaultItem(item);
+    });
+
+    vaultRowsEl.appendChild(tr);
   }
+}
+
+function buildVaultPayload(command, payload = {}) {
+  return {
+    id: payload?.requestId ?? `${command}-${Date.now()}`,
+    version: 1,
+    command,
+    payload
+  };
 }
 
 async function refreshList() {
@@ -119,11 +175,39 @@ async function refreshList() {
     ...(rpId ? { rpId } : {})
   };
   payloadEl.value = JSON.stringify(payload);
-  const res = await sendNativeAwait(payload);
+  const res = await sendNativeAwait(payload, "passkey");
   if (res?.ok && res?.payload && Array.isArray(res.payload.passkeys)) {
     lastPasskeys = res.payload.passkeys;
     renderPasskeys();
     setResult({ ok: true, native: res.payload });
+    return;
+  }
+  setResult(res ?? { ok: false, error: "No response" });
+}
+
+async function refreshVaultList() {
+  const payload = buildVaultPayload("vault.login.list", {
+    includeDeleted: false,
+    requestId: `vault-list-${Date.now()}`
+  });
+  payloadEl.value = JSON.stringify(payload, null, 2);
+  const res = await sendNativeAwait(payload, "vault");
+  if (res?.ok && res?.payload && Array.isArray(res.payload.result?.items)) {
+    lastVaultItems = res.payload.result.items;
+    renderVaultItems();
+    if (!(vaultItemIdEl.value ?? "").trim() && lastVaultItems.length === 1) {
+      selectVaultItem(lastVaultItems[0]);
+    }
+    setResult({ ok: true, native: res.payload });
+    return;
+  }
+  if (res?.ok && Array.isArray(res?.raw?.result?.items)) {
+    lastVaultItems = res.raw.result.items;
+    renderVaultItems();
+    if (!(vaultItemIdEl.value ?? "").trim() && lastVaultItems.length === 1) {
+      selectVaultItem(lastVaultItems[0]);
+    }
+    setResult({ ok: true, native: res.raw });
     return;
   }
   setResult(res ?? { ok: false, error: "No response" });
@@ -136,24 +220,25 @@ async function initListByActiveTabUrl() {
     const rpId = tryDeriveRpIdFromUrl(currentUrl);
     if (rpId) {
       rpIdFilterEl.value = rpId;
+      vaultUrlEl.value = `https://${rpId}`;
+      pkRpIdEl.value = rpId;
     }
     await refreshList();
+    await refreshVaultList();
   } catch (e) {
     setResult({ ok: false, error: `Failed to read active tab URL: ${String(e)}` });
   }
 }
 
-connectBtn.addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "connect-native" }, (res) => {
-    if (chrome.runtime.lastError) {
-      setResult({ ok: false, error: chrome.runtime.lastError.message });
-      return;
-    }
-    setResult(res ?? { ok: false, error: "No response" });
-  });
+connectBtn.addEventListener("click", async () => {
+  setResult(await sendMessage({ type: "connect-native", target: "passkey" }));
 });
 
-sendBtn.addEventListener("click", () => {
+connectVaultBtn.addEventListener("click", async () => {
+  setResult(await sendMessage({ type: "vault-connect" }));
+});
+
+sendBtn.addEventListener("click", async () => {
   let parsed;
   try {
     parsed = JSON.parse(payloadEl.value);
@@ -162,13 +247,8 @@ sendBtn.addEventListener("click", () => {
     return;
   }
 
-  chrome.runtime.sendMessage({ type: "native-request", payload: parsed }, (res) => {
-    if (chrome.runtime.lastError) {
-      setResult({ ok: false, error: chrome.runtime.lastError.message });
-      return;
-    }
-    setResult(res ?? { ok: false, error: "No response" });
-  });
+  const target = parsed?.command?.startsWith("vault.") ? "vault" : "passkey";
+  setResult(await sendNative(parsed, target));
 });
 
 listBtn.addEventListener("click", async () => {
@@ -179,8 +259,7 @@ clearBtn.addEventListener("click", async () => {
   const requestId = `clear-${Date.now()}`;
   const payload = { type: "clear_passkeys", requestId };
   payloadEl.value = JSON.stringify(payload);
-  const res = await sendNative(payload);
-  setResult(res);
+  setResult(await sendNative(payload, "passkey"));
 });
 
 addBtn.addEventListener("click", async () => {
@@ -196,8 +275,7 @@ addBtn.addEventListener("click", async () => {
     }
   };
   payloadEl.value = JSON.stringify(payload);
-  const res = await sendNative(payload);
-  setResult(res);
+  setResult(await sendNative(payload, "passkey"));
 });
 
 removeBtn.addEventListener("click", async () => {
@@ -209,8 +287,91 @@ removeBtn.addEventListener("click", async () => {
   const requestId = `remove-${Date.now()}`;
   const payload = { type: "remove_passkey", requestId, id };
   payloadEl.value = JSON.stringify(payload);
-  const res = await sendNative(payload);
-  setResult(res);
+  setResult(await sendNative(payload, "passkey"));
+});
+
+vaultStatusBtn.addEventListener("click", async () => {
+  const payload = buildVaultPayload("vault.status.get", { requestId: `vault-status-${Date.now()}` });
+  payloadEl.value = JSON.stringify(payload, null, 2);
+  const res = await sendNativeAwait(payload, "vault");
+  setResult(res?.raw ?? res);
+});
+
+vaultListBtn.addEventListener("click", async () => {
+  await refreshVaultList();
+});
+
+vaultResyncBtn.addEventListener("click", async () => {
+  const payload = buildVaultPayload("vault.sync.resync", { requestId: `vault-resync-${Date.now()}` });
+  payloadEl.value = JSON.stringify(payload, null, 2);
+  const res = await sendNativeAwait(payload, "vault");
+  setResult(res?.raw ?? res);
+  if (res?.ok) {
+    await refreshVaultList();
+  }
+});
+
+vaultSaveBtn.addEventListener("click", async () => {
+  const payload = buildVaultPayload("vault.login.save", {
+    title: (vaultTitleEl.value ?? "").trim(),
+    username: (vaultUsernameEl.value ?? "").trim(),
+    password: (vaultPasswordEl.value ?? "").trim(),
+    url: (vaultUrlEl.value ?? "").trim(),
+    notes: (vaultNotesEl.value ?? "").trim(),
+    resync: true,
+    requestId: `vault-save-${Date.now()}`
+  });
+  payloadEl.value = JSON.stringify(payload, null, 2);
+  const res = await sendNativeAwait(payload, "vault");
+  setResult(res?.raw ?? res);
+  if (res?.ok) {
+    vaultPasswordEl.value = "";
+    await refreshVaultList();
+  }
+});
+
+vaultUpdateBtn.addEventListener("click", async () => {
+  const itemId = (vaultItemIdEl.value ?? "").trim();
+  if (!itemId) {
+    setResult({ ok: false, error: "itemId is required." });
+    return;
+  }
+  const payload = buildVaultPayload("vault.login.update", {
+    itemId,
+    title: (vaultTitleEl.value ?? "").trim(),
+    username: (vaultUsernameEl.value ?? "").trim(),
+    password: (vaultPasswordEl.value ?? "").trim(),
+    url: (vaultUrlEl.value ?? "").trim(),
+    notes: (vaultNotesEl.value ?? "").trim(),
+    resync: true,
+    requestId: `vault-update-${Date.now()}`
+  });
+  payloadEl.value = JSON.stringify(payload, null, 2);
+  const res = await sendNativeAwait(payload, "vault");
+  setResult(res?.raw ?? res);
+  if (res?.ok) {
+    vaultPasswordEl.value = "";
+    await refreshVaultList();
+  }
+});
+
+vaultDeleteBtn.addEventListener("click", async () => {
+  const itemId = (vaultItemIdEl.value ?? "").trim();
+  if (!itemId) {
+    setResult({ ok: false, error: "itemId is required." });
+    return;
+  }
+  const payload = buildVaultPayload("vault.login.delete", {
+    itemId,
+    resync: true,
+    requestId: `vault-delete-${Date.now()}`
+  });
+  payloadEl.value = JSON.stringify(payload, null, 2);
+  const res = await sendNativeAwait(payload, "vault");
+  setResult(res?.raw ?? res);
+  if (res?.ok) {
+    await refreshVaultList();
+  }
 });
 
 searchEl.addEventListener("input", () => {
@@ -220,14 +381,14 @@ searchEl.addEventListener("input", () => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type === "native-response") {
     const payload = msg.payload;
-    if (payload && typeof payload === "object" && Array.isArray(payload.passkeys)) {
+    if (msg?.target === "passkey" && payload && typeof payload === "object" && Array.isArray(payload.passkeys)) {
       lastPasskeys = payload.passkeys;
       renderPasskeys();
     }
-    setResult({ ok: true, native: payload });
+    setResult({ ok: true, target: msg?.target, native: payload });
   }
   if (msg?.type === "native-error") {
-    setResult({ ok: false, error: msg.error });
+    setResult({ ok: false, target: msg?.target, error: msg.error });
   }
 });
 

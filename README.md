@@ -2,12 +2,18 @@
 
 Native Messaging を使って PasskeyManager と連携するための Chrome 拡張（Manifest V3）スキャフォールドです。
 
+現在は以下の 2 系統の Native Host を併用します。
+
+- `com.tsupasswd.bridge`: 既存の passkey bridge host
+- `dev.happyfactory.tsupasswd_core`: PasskeyManager 本体の Vault host
+
 ## Files
 
 - `manifest.json`: 拡張機能の定義
 - `background.js`: Native Messaging 接続とリレー
-- `popup.html` / `popup.js`: 簡易テスト UI
+- `popup.html` / `popup.js`: passkey 一覧 + Vault login 管理 UI
 - `native-host/com.tsupasswd.bridge.json`: ネイティブホストのマニフェストテンプレート
+- `native-host/dev.happyfactory.tsupasswd_core.json`: Vault host のマニフェストテンプレート
 - `install-native-host.ps1`: AppData 配置 + レジストリ登録スクリプト（Windows）
 
 ## Load extension
@@ -29,15 +35,25 @@ powershell -ExecutionPolicy Bypass -File C:\AppPackages\tsupasswd_js\install-nat
 
 - bridge host 実行ファイル一式を `%LOCALAPPDATA%\tsupasswd\bridge-host` にコピー
 - `%LOCALAPPDATA%\tsupasswd\com.tsupasswd.bridge.json` を生成
+- `%LOCALAPPDATA%\tsupasswd\dev.happyfactory.tsupasswd_core.json` を生成
 - `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.tsupasswd.bridge` を登録
+- `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\dev.happyfactory.tsupasswd_core` を登録
 
 ## Important
 
 - `native-host/com.tsupasswd.bridge.json` 内の `allowed_origins` の拡張機能 ID を置き換える
 - `path` が実際のブリッジ実行ファイルを指すようにする
+- `native-host/dev.happyfactory.tsupasswd_core.json` の `path` が `tsupasswd_core.exe` を指すようにする
 - ネイティブホスト実行ファイルは stdin/stdout で「長さプレフィックス付き JSON」を read/write できる必要がある
 - パスキー一覧に表示されるのは `tsupasswd_core` と `Windows Hello` から取得できた項目のみ
 - `Google パスワード マネージャー` に保存されたパスキーは、この拡張の一覧には含まれない
+
+## Popup でできること
+
+- passkey bridge host への接続確認
+- passkey 一覧の表示
+- Vault host への接続確認
+- Vault login の status / list / save / update / delete / resync
 
 ## Bridge host scaffold (created)
 

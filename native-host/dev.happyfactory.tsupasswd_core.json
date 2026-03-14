@@ -1,0 +1,9 @@
+{
+  "name": "dev.happyfactory.tsupasswd_core",
+  "description": "Vault native host for tsupasswd chrome extension",
+  "path": "C:\\AppPackages\\passkeymanager\\tsupasswd_js\\native-host\\VaultHost\\bin\\Release\\net8.0\\win-x64\\publish\\tsupasswd-vault-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://cmodllncabncibkbleljmljfkehgkopn/"
+  ]
+}

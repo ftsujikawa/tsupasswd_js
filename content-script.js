@@ -408,9 +408,61 @@
       isPointerInMenu = false;
     });
 
-    menuEl.addEventListener("mousedown", (e) => {
+    const pickUnderlyingElement = (clientX, clientY) => {
+      const prevPointerEvents = menuEl.style.pointerEvents;
+      menuEl.style.pointerEvents = "none";
+      const under = document.elementFromPoint(clientX, clientY);
+      menuEl.style.pointerEvents = prevPointerEvents;
+      return under;
+    };
+
+    const handleMenuPointerDown = (e) => {
+      const target = e.target;
+      const isInteractive =
+        target instanceof HTMLElement &&
+        (target.closest(".item") ||
+          target.closest("button") ||
+          (target.tagName || "").toLowerCase() === "input" ||
+          (target.getAttribute("role") || "").toLowerCase() === "button");
+      if (isInteractive) {
+        e.stopPropagation();
+        return;
+      }
+
+      const under = pickUnderlyingElement(e.clientX, e.clientY);
+      const underlyingEligible = findEligibleInputFromNode(under);
+
+      // メニューが入力欄に被さっている時、非操作領域クリックであれば
+      // 背面に別の入力欄がある場合はそちらへフォーカス移動を優先する。
+      if (underlyingEligible && underlyingEligible !== activeInput) {
+        hideMenu({ force: true });
+        e.stopPropagation();
+        try {
+          underlyingEligible.focus();
+        } catch {}
+        openMenuForInput(underlyingEligible);
+        return;
+      }
+
+      // 非操作領域クリックは背面要素へ通す。
+      hideMenu({ force: true });
       e.stopPropagation();
-    });
+
+      if (under instanceof HTMLElement) {
+        try {
+          under.focus();
+        } catch {}
+        try {
+          under.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true, clientX: e.clientX, clientY: e.clientY }));
+          under.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, composed: true, clientX: e.clientX, clientY: e.clientY }));
+          under.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, composed: true, clientX: e.clientX, clientY: e.clientY }));
+          under.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, clientX: e.clientX, clientY: e.clientY }));
+        } catch {}
+      }
+    };
+
+    menuEl.addEventListener("pointerdown", handleMenuPointerDown);
+    menuEl.addEventListener("mousedown", handleMenuPointerDown);
   }
 
   function isEligibleInput(el) {
@@ -418,7 +470,7 @@
     if (el instanceof HTMLTextAreaElement) return true;
     if (el instanceof HTMLInputElement) {
       const t = (el.type || "text").toLowerCase();
-      return !["hidden", "password", "checkbox", "radio", "file", "submit", "button"].includes(t);
+      return !["hidden", "checkbox", "radio", "file", "submit", "button"].includes(t);
     }
     if (el.isContentEditable) return true;
     if ((el.getAttribute("role") || "").toLowerCase() === "textbox") return true;
@@ -564,6 +616,42 @@
     return null;
   }
 
+  function isEmailLikeInput(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el instanceof HTMLInputElement) {
+      const type = String(el.type || "").trim().toLowerCase();
+      if (type === "email") return true;
+    }
+    const autocomplete = String(el.getAttribute("autocomplete") || "").trim().toLowerCase();
+    if (autocomplete === "email" || autocomplete === "username") return true;
+    const inputMode = String(el.getAttribute("inputmode") || "").trim().toLowerCase();
+    if (inputMode === "email") return true;
+    const identifierText = [el.getAttribute("name"), el.getAttribute("id"), el.getAttribute("placeholder")]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .join(" ");
+    return /(e-?mail|mail|user(name)?|login|account)/.test(identifierText);
+  }
+
+  function isPasswordLikeInput(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el instanceof HTMLInputElement) {
+      const type = String(el.type || "").trim().toLowerCase();
+      if (type === "password") return true;
+    }
+    const autocomplete = String(el.getAttribute("autocomplete") || "").trim().toLowerCase();
+    if (autocomplete === "current-password" || autocomplete === "new-password") return true;
+    const identifierText = [el.getAttribute("name"), el.getAttribute("id"), el.getAttribute("placeholder")]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .join(" ");
+    return /(pass(word|code)?|pwd|secret)/.test(identifierText);
+  }
+
+  function maskPassword(rawValue) {
+    const value = String(rawValue || "");
+    if (!value) return "";
+    return "*".repeat(Math.max(8, value.length));
+  }
+
   function hideMenu(options = {}) {
     const { force = false } = options;
     if (!menuEl) return;
@@ -578,11 +666,29 @@
     const gap = 6;
     const menuWidth = Math.min(360, window.innerWidth - 16);
 
-    let left = Math.max(8, Math.min(r.left, window.innerWidth - menuWidth - 8));
-    let top = r.bottom + gap;
+    const clamp = (v, min, max) => Math.max(min, Math.min(v, max));
+    const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+    const menuHeightHint = 260;
 
-    if (top + 260 > window.innerHeight) {
-      top = Math.max(8, r.top - 260 - gap);
+    const rightSpace = window.innerWidth - r.right;
+    const leftSpace = r.left;
+    const canPlaceRight = rightSpace >= menuWidth + gap + 8;
+    const canPlaceLeft = leftSpace >= menuWidth + gap + 8;
+
+    let left;
+    let top;
+    if (canPlaceRight) {
+      left = clamp(r.right + gap, 8, maxLeft);
+      top = clamp(r.top, 8, window.innerHeight - menuHeightHint - 8);
+    } else if (canPlaceLeft) {
+      left = clamp(r.left - menuWidth - gap, 8, maxLeft);
+      top = clamp(r.top, 8, window.innerHeight - menuHeightHint - 8);
+    } else {
+      left = clamp(r.left, 8, maxLeft);
+      top = r.bottom + gap;
+      if (top + menuHeightHint > window.innerHeight) {
+        top = Math.max(8, r.top - menuHeightHint - gap);
+      }
     }
 
     menuEl.style.left = `${left}px`;
@@ -619,6 +725,15 @@
     }
 
     return currentHost;
+  }
+
+  function deriveRpIdFromUrl(rawUrl) {
+    try {
+      const parsed = new URL(String(rawUrl ?? ""), window.location.href);
+      return String(parsed.hostname ?? "").trim().toLowerCase();
+    } catch {
+      return "";
+    }
   }
 
   function requestNativeList(rpId) {
@@ -707,6 +822,141 @@
     });
   }
 
+  function requestVaultLoginSave({ title, username, password, url, notes }) {
+    return new Promise((resolve) => {
+      if (!chrome?.runtime?.sendMessage) {
+        resolve({ ok: false, error: "chrome_runtime_unavailable" });
+        return;
+      }
+
+      const requestId = `cs-vault-save-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      let settled = false;
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        resolve(payload);
+      };
+
+      const timeoutId = setTimeout(() => {
+        finish({ ok: false, error: "native_request_timeout", detail: "Vault host response timed out" });
+      }, 8000);
+
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "vault-request-await",
+            payload: {
+              id: requestId,
+              version: 1,
+              command: "vault.login.save",
+              payload: {
+                title: String(title ?? ""),
+                username: String(username ?? ""),
+                password: String(password ?? ""),
+                url: String(url ?? ""),
+                notes: String(notes ?? ""),
+                resync: true,
+                requestId
+              }
+            },
+            target: "vault"
+          },
+          (res) => {
+            clearTimeout(timeoutId);
+            if (chrome.runtime.lastError) {
+              finish({ ok: false, error: String(chrome.runtime.lastError.message || "") });
+              return;
+            }
+            if (!res?.ok) {
+              finish({ ok: false, error: res?.error || "vault-request-failed", detail: res?.detail });
+              return;
+            }
+            finish({ ok: true, requestId, payload: res?.payload ?? res?.raw });
+          }
+        );
+      } catch (e) {
+        clearTimeout(timeoutId);
+        finish({ ok: false, error: "vault_send_failed", detail: String(e?.message || e) });
+      }
+    });
+  }
+
+  function requestVaultLoginList(rpId) {
+    return new Promise((resolve) => {
+      if (!chrome?.runtime?.sendMessage) {
+        resolve({ ok: false, error: "chrome_runtime_unavailable" });
+        return;
+      }
+
+      const requestId = `cs-vault-list-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      let settled = false;
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        resolve(payload);
+      };
+
+      const timeoutId = setTimeout(() => {
+        finish({ ok: false, error: "native_request_timeout", detail: "Vault host response timed out" });
+      }, 8000);
+
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "vault-request-await",
+            payload: {
+              id: requestId,
+              version: 1,
+              command: "vault.login.list",
+              payload: {
+                includeDeleted: false,
+                requestId
+              }
+            },
+            target: "vault"
+          },
+          (res) => {
+            clearTimeout(timeoutId);
+            if (chrome.runtime.lastError) {
+              finish({ ok: false, error: String(chrome.runtime.lastError.message || "") });
+              return;
+            }
+            if (!res?.ok) {
+              finish({ ok: false, error: res?.error || "vault-request-failed", detail: res?.detail });
+              return;
+            }
+
+            const native = res?.payload ?? res?.raw;
+            const items = Array.isArray(native?.result?.items) ? native.result.items : [];
+            const host = String(rpId || "").trim().toLowerCase();
+            const mapped = items
+              .map((item) => {
+                const itemRpId = deriveRpIdFromUrl(item?.url);
+                return {
+                  id: String(item?.itemId ?? ""),
+                  title: String(item?.title ?? ""),
+                  rpId: itemRpId,
+                  user: String(item?.username ?? ""),
+                  password: String(item?.password ?? ""),
+                  source: "tsupasswd_core",
+                  vault: true,
+                  url: String(item?.url ?? ""),
+                  updatedAt: String(item?.updatedAt ?? ""),
+                  createdAt: String(item?.createdAt ?? "")
+                };
+              })
+              .filter((p) => !host || isRpIdRelatedToHost(p?.rpId, host));
+
+            finish({ ok: true, requestId, passkeys: mapped, sources: { vault: { ok: true, count: mapped.length } } });
+          }
+        );
+      } catch (e) {
+        clearTimeout(timeoutId);
+        finish({ ok: false, error: "vault_send_failed", detail: String(e?.message || e) });
+      }
+    });
+  }
+
   function isRpIdRelatedToHost(passkeyRpId, host) {
     const rp = String(passkeyRpId || "").trim().toLowerCase();
     const h = String(host || "").trim().toLowerCase();
@@ -765,9 +1015,13 @@
     const { closeMenu = true, focusInput = true, emitChange = true, emitCommitEvents = emitChange } = options;
     activeInput = resolveTargetInput(activeInput);
     if (!activeInput) return false;
-    const value = passkey?.user || passkey?.id || passkey?.title || "";
+    const value = isPasswordLikeInput(activeInput)
+      ? passkey?.password || passkey?.secret || ""
+      : passkey?.user || passkey?.id || passkey?.title || "";
     if (!value) {
-      lastAuthInfoMessage = "この項目は入力可能なuser値がありません。";
+      lastAuthInfoMessage = isPasswordLikeInput(activeInput)
+        ? "この項目は入力可能なpassword値がありません。"
+        : "この項目は入力可能なuser値がありません。";
       renderMenu({ ok: true, passkeys: [] });
       return false;
     }
@@ -948,6 +1202,338 @@
     el.value = value;
   }
 
+  function applyValueToInput(targetInput, value, options = {}) {
+    const { focusInput = false, emitChange = true, emitCommitEvents = false } = options;
+    if (!(targetInput instanceof HTMLElement)) return false;
+
+    if (focusInput) {
+      targetInput.focus();
+    }
+
+    const rootNode = typeof targetInput.getRootNode === "function" ? targetInput.getRootNode() : null;
+    const shadowHost = rootNode instanceof ShadowRoot && rootNode.host instanceof HTMLElement ? rootNode.host : null;
+
+    setInputValue(targetInput, value);
+    targetInput.setAttribute("value", value);
+    if (shadowHost) {
+      try {
+        if ("value" in shadowHost) {
+          shadowHost.value = value;
+        }
+      } catch {}
+      shadowHost.setAttribute("value", value);
+    }
+
+    const dispatchInputEvents = (el) => {
+      if (!(el instanceof HTMLElement)) return;
+      el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      if (emitChange) {
+        el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      }
+    };
+
+    dispatchInputEvents(targetInput);
+    if (shadowHost && shadowHost !== targetInput) {
+      dispatchInputEvents(shadowHost);
+    }
+
+    if (emitCommitEvents) {
+      targetInput.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, composed: true, key: "Enter" }));
+      targetInput.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+
+    return String(targetInput.value ?? targetInput.textContent ?? "") === String(value);
+  }
+
+  function fillCredentialInputs(passkey, options = {}) {
+    const { closeMenu = true } = options;
+    const related = findRelatedCredentialInputs(activeInput);
+    const userValue = String(passkey?.user ?? "").trim();
+    const passwordValue = String(passkey?.password ?? passkey?.secret ?? "");
+    let applied = false;
+
+    if (related.userInput && userValue) {
+      applied = applyValueToInput(related.userInput, userValue, { focusInput: true, emitChange: true }) || applied;
+    }
+    if (related.passwordInput && passwordValue) {
+      applied = applyValueToInput(related.passwordInput, passwordValue, { focusInput: !applied, emitChange: true }) || applied;
+    }
+
+    if (applied && closeMenu) {
+      hideMenu();
+    }
+
+    return applied;
+  }
+
+  function tryClickSubmitLikeButton(referenceInput = activeInput) {
+    const ref = referenceInput instanceof HTMLElement ? referenceInput : null;
+    const related = findRelatedCredentialInputs(ref);
+    const base = related.passwordInput || related.userInput || ref;
+    if (!(base instanceof HTMLElement)) return false;
+
+    const form =
+      (base instanceof HTMLInputElement || base instanceof HTMLTextAreaElement ? base.form : null) ||
+      (typeof base.closest === "function" ? base.closest("form") : null);
+
+    const candidates = [];
+    const pushAll = (list) => {
+      for (const el of list) {
+        if (el instanceof HTMLElement) candidates.push(el);
+      }
+    };
+
+    if (form instanceof HTMLFormElement) {
+      // まずはフォーム送信を試す（submitボタンが特定できない/ラベルが取れないサイト向け）
+      try {
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+          return true;
+        }
+      } catch {}
+
+      pushAll(form.querySelectorAll("button[type='submit'], input[type='submit']"));
+      pushAll(form.querySelectorAll("button, [role='button'], input[type='button'], a[role='button']"));
+    } else {
+      // formが取れないサイト向け: 近傍のボタンだけを見る
+      const container = typeof base.closest === "function" ? base.closest("section, form, div") : null;
+      if (container instanceof HTMLElement) {
+        pushAll(
+          container.querySelectorAll(
+            "button[type='submit'], input[type='submit'], button, [role='button'], input[type='button'], a[role='button']"
+          )
+        );
+      }
+    }
+
+    if (!candidates.length) return false;
+
+    const normalize = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const textOf = (el) => {
+      if (!(el instanceof HTMLElement)) return "";
+      return normalize(el.getAttribute("aria-label") || el.getAttribute("title") || el.textContent || "");
+    };
+
+    const attrsOf = (el) => {
+      if (!(el instanceof HTMLElement)) return "";
+      const id = el.getAttribute("id") || "";
+      const cls = el.getAttribute("class") || "";
+      const name = el.getAttribute("name") || "";
+      const value = el instanceof HTMLInputElement ? el.value || "" : "";
+      return normalize([id, cls, name, value].filter(Boolean).join(" "));
+    };
+
+    const isDisabled = (el) => {
+      if (el instanceof HTMLButtonElement) return Boolean(el.disabled);
+      if (el instanceof HTMLInputElement) return Boolean(el.disabled);
+      return false;
+    };
+
+    const prioritized = candidates
+      .filter((el) => !isDisabled(el))
+      .map((el) => ({ el, label: textOf(el), attrs: attrsOf(el) }));
+
+    const labelMatches = (label) => {
+      return (
+        label.includes("continue") ||
+        label.includes("next") ||
+        label.includes("sign in") ||
+        label.includes("sign-in") ||
+        label.includes("signin") ||
+        label.includes("log in") ||
+        label.includes("login") ||
+        label.includes("ログイン") ||
+        label.includes("次へ") ||
+        label.includes("つぎへ") ||
+        label.includes("続ける") ||
+        label.includes("つづける") ||
+        label.includes("送信") ||
+        label.includes("確定") ||
+        label.includes("進む")
+      );
+    };
+
+    const attrsMatches = (attrs) => {
+      // クラスやidに login/submit っぽい語が含まれているケース対応
+      return (
+        attrs.includes("login") ||
+        attrs.includes("signin") ||
+        attrs.includes("sign-in") ||
+        attrs.includes("sign_in") ||
+        attrs.includes("continue") ||
+        attrs.includes("next") ||
+        attrs.includes("submit") ||
+        attrs.includes("ログイン") ||
+        attrs.includes("次へ") ||
+        attrs.includes("続ける")
+      );
+    };
+
+    const best = prioritized.find((c) => labelMatches(c.label) || attrsMatches(c.attrs))?.el;
+    if (best && clickElementRobust(best)) {
+      return true;
+    }
+
+    // ラベル一致がない場合はsubmit系のみ押す
+    const submitOnly = candidates.find((el) =>
+      el instanceof HTMLButtonElement ? el.type === "submit" : el instanceof HTMLInputElement ? el.type === "submit" : false
+    );
+    if (submitOnly && clickElementRobust(submitOnly)) {
+      return true;
+    }
+
+    // 最後の手段: form/近傍で押せる候補が1つだけならそれを押す
+    const unique = prioritized.length === 1 ? prioritized[0]?.el : null;
+    return Boolean(unique && clickElementRobust(unique));
+  }
+
+  function findRelatedCredentialInputs(referenceInput = activeInput) {
+    const ref = referenceInput instanceof HTMLElement ? referenceInput : null;
+    const allInputs = Array.from(document.querySelectorAll("input, textarea, [contenteditable='true'], [role='textbox']"));
+    const eligibleInputs = allInputs.filter((el) => isEligibleInput(el));
+    const findNearest = (predicate) => {
+      if (!eligibleInputs.length) return null;
+      const matched = eligibleInputs.filter((el) => predicate(el));
+      if (!matched.length) return null;
+      if (!ref) return matched[0];
+      const refForm = typeof ref.closest === "function" ? ref.closest("form") : null;
+      const sameForm = matched.filter((el) => {
+        const elForm = typeof el.closest === "function" ? el.closest("form") : null;
+        return refForm && elForm && elForm === refForm;
+      });
+      const pool = sameForm.length ? sameForm : matched;
+      return pool[0];
+    };
+
+    const userInput = isEmailLikeInput(ref) ? ref : findNearest((el) => isEmailLikeInput(el));
+    const passwordInput = isPasswordLikeInput(ref) ? ref : findNearest((el) => isPasswordLikeInput(el));
+    return {
+      userInput: userInput instanceof HTMLElement ? userInput : null,
+      passwordInput: passwordInput instanceof HTMLElement ? passwordInput : null
+    };
+  }
+
+  function appendManualCredentialEntryForm() {
+    if (!listEl) return;
+    const shouldShowForm = isEmailLikeInput(activeInput) || isPasswordLikeInput(activeInput);
+    if (!shouldShowForm) return;
+
+    const relatedInputs = findRelatedCredentialInputs(activeInput);
+    const formWrap = document.createElement("div");
+    formWrap.className = "item";
+
+    const title = document.createElement("div");
+    title.className = "t";
+    title.textContent = "手入力";
+
+    const hint = document.createElement("div");
+    hint.className = "m";
+    hint.textContent = "URL一致候補がないため、ユーザIDとパスワードを手入力できます。";
+
+    const userInputEl = document.createElement("input");
+    userInputEl.type = "text";
+    userInputEl.placeholder = "ユーザID / E-mail";
+    userInputEl.style.width = "100%";
+    userInputEl.style.marginTop = "8px";
+
+    const passwordInputEl = document.createElement("input");
+    passwordInputEl.type = "password";
+    passwordInputEl.placeholder = "パスワード";
+    passwordInputEl.style.width = "100%";
+    passwordInputEl.style.marginTop = "8px";
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "8px";
+
+    const applyBtn = document.createElement("button");
+    applyBtn.type = "button";
+    applyBtn.className = "mode-toggle";
+    applyBtn.textContent = "入力";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "mode-toggle";
+    saveBtn.textContent = "保存";
+
+    applyBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const userValue = String(userInputEl.value || "").trim();
+      const passwordValue = String(passwordInputEl.value || "");
+      let appliedCount = 0;
+
+      if (relatedInputs.userInput && userValue) {
+        if (applyValueToInput(relatedInputs.userInput, userValue, { focusInput: true, emitChange: true })) {
+          appliedCount += 1;
+        }
+      }
+
+      if (relatedInputs.passwordInput && passwordValue) {
+        if (applyValueToInput(relatedInputs.passwordInput, passwordValue, { focusInput: appliedCount === 0, emitChange: true })) {
+          appliedCount += 1;
+        }
+      }
+
+      if (appliedCount > 0) {
+        lastAuthInfoMessage = `手入力を反映: user=${userValue ? "ok" : "skip"} / password=${passwordValue ? "ok" : "skip"}`;
+        lastAuthErrorMessage = "";
+        hideMenu();
+        return;
+      }
+
+      lastAuthErrorMessage = "手入力を反映できませんでした。対象の入力欄をクリックして再試行してください。";
+      renderMenu({ ok: true, passkeys: [] });
+    });
+
+    saveBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const userValue = String(userInputEl.value || "").trim();
+      const passwordValue = String(passwordInputEl.value || "");
+      if (!userValue && !passwordValue) {
+        lastAuthErrorMessage = "保存する値がありません。ユーザIDまたはパスワードを入力してください。";
+        renderMenu({ ok: true, passkeys: [] });
+        return;
+      }
+
+      const rpId = deriveRpIdFromPage();
+      const saveUrl = rpId ? `https://${rpId}` : "";
+      const saveResult = await requestVaultLoginSave({
+        title: userValue || saveUrl,
+        username: userValue,
+        password: passwordValue,
+        url: saveUrl,
+        notes: ""
+      });
+
+      if (saveResult?.ok) {
+        lastAuthInfoMessage = "Vaultへ保存しました。";
+        lastAuthErrorMessage = "";
+        const anchor = getMenuRefreshAnchor();
+        if (anchor) {
+          openMenuForInput(anchor);
+        }
+        return;
+      }
+
+      lastAuthErrorMessage = `Vault保存失敗: ${saveResult?.error || "unknown"}${saveResult?.detail ? ` (${saveResult.detail})` : ""}`;
+      renderMenu({ ok: true, passkeys: [] });
+    });
+
+    actions.appendChild(applyBtn);
+    actions.appendChild(saveBtn);
+    formWrap.appendChild(title);
+    formWrap.appendChild(hint);
+    formWrap.appendChild(userInputEl);
+    formWrap.appendChild(passwordInputEl);
+    formWrap.appendChild(actions);
+    listEl.appendChild(formWrap);
+  }
+
   function resolvePasskeysDemoUsernameInput() {
     const candidates = [
       "#username",
@@ -1022,6 +1608,9 @@
   function renderMenu(result) {
     if (!listEl) return;
     listEl.textContent = "";
+    const emailLikeInput = isEmailLikeInput(activeInput);
+    const passwordLikeInput = isPasswordLikeInput(activeInput);
+    const shouldShowCredentialPair = (emailLikeInput || passwordLikeInput) && !isWebauthnHookTargetHost();
 
     const coreMeta = result?.sources?.core;
     const windowsMeta = result?.sources?.windows_hello;
@@ -1065,6 +1654,8 @@
       div.className = "empty";
       div.textContent = "該当するパスキーがありません";
       listEl.appendChild(div);
+
+      appendManualCredentialEntryForm();
 
       if (windowsMeta && typeof windowsMeta === "object") {
         const meta = document.createElement("div");
@@ -1118,6 +1709,7 @@
       const titleText = p?.title || "";
       const rpIdText = p?.rpId || "";
       const idSuffix = getCredentialIdSuffix(p?.id);
+      const passwordText = String(p?.password || p?.secret || "").trim();
 
       const t = document.createElement("div");
       t.className = "t";
@@ -1125,20 +1717,31 @@
 
       const m = document.createElement("div");
       m.className = "m";
-      m.textContent = [
-        titleText,
-        rpIdText ? `rpId: ${rpIdText}` : "",
-        idSuffix ? `id: ...${idSuffix}` : "",
-        `source: ${sourceText}`
-      ]
-        .filter(Boolean)
-        .join("  ");
+      m.textContent = shouldShowCredentialPair
+        ? [
+            `user: ${userText}`,
+            passwordText ? `password: ${maskPassword(passwordText)}` : "password: (none)",
+            rpIdText ? `rpId: ${rpIdText}` : "",
+            `source: ${sourceText}`
+          ]
+            .filter(Boolean)
+            .join("  ")
+        : [
+            titleText,
+            rpIdText ? `rpId: ${rpIdText}` : "",
+            idSuffix ? `id: ...${idSuffix}` : "",
+            `source: ${sourceText}`
+          ]
+            .filter(Boolean)
+            .join("  ");
 
       item.appendChild(t);
       item.appendChild(m);
-      item.addEventListener("mouseenter", () =>
-        fillActiveInput(p, { closeMenu: false, focusInput: false, emitChange: false })
-      );
+      if (!shouldShowCredentialPair) {
+        item.addEventListener("mouseenter", () =>
+          fillActiveInput(p, { closeMenu: false, focusInput: false, emitChange: false })
+        );
+      }
 
       let isActivated = false;
       const activateItem = async () => {
@@ -1151,6 +1754,22 @@
         lastAuthErrorMessage = "";
         isMenuPinned = false;
         isPointerInMenu = false;
+        if (shouldShowCredentialPair) {
+          const applied = fillCredentialInputs(p, { closeMenu: true });
+          if (applied) {
+            const kicked = tryClickSubmitLikeButton(activeInput);
+            lastAuthInfoMessage = `選択: ${userLabel} / 資格情報を入力欄へ反映${kicked ? " / ボタンをクリック" : ""}`;
+            lastAuthErrorMessage = "";
+          } else {
+            lastAuthErrorMessage = "入力欄へ値を反映できませんでした。対象入力欄をクリックして再試行してください。";
+          }
+          renderMenu({ ok: true, passkeys });
+          setTimeout(() => {
+            isActivated = false;
+          }, 0);
+          return;
+        }
+
         const isPasskeysDemo = isPasskeysDemoHost();
         const isPasskeyOrg = isPasskeyOrgHost();
         let enteredUser = "";
@@ -1307,7 +1926,7 @@
   }
 
   async function openMenuForInput(inputEl) {
-    const forceShow = shouldShowMenuEvenIfEmpty();
+    const forceShow = shouldShowMenuEvenIfEmpty() || isEmailLikeInput(inputEl) || isPasswordLikeInput(inputEl);
     const eligibleInput = isEligibleInput(inputEl) ? inputEl : null;
     if (!eligibleInput && !(forceShow && inputEl instanceof HTMLElement)) return;
     const resolvedInput = resolveTargetInput(eligibleInput || activeInput);
@@ -1332,7 +1951,21 @@
     let result;
     try {
       const rpId = deriveRpIdFromPage();
-      result = await requestNativeListWithFallback(rpId);
+      const shouldForceUrlFilter =
+        (isEmailLikeInput(menuAnchor) || isPasswordLikeInput(menuAnchor)) && !isWebauthnHookTargetHost();
+      if (shouldForceUrlFilter) {
+        let forced = await requestVaultLoginList(rpId);
+        if (forced?.ok && Array.isArray(forced.passkeys) && forced.passkeys.length > 0) {
+          result = forced;
+        } else if (rpId && rpId.startsWith("www.")) {
+          forced = await requestVaultLoginList(rpId.slice(4));
+          result = forced;
+        } else {
+          result = forced;
+        }
+      } else {
+        result = await requestNativeListWithFallback(rpId);
+      }
     } catch (e) {
       result = { ok: false, error: "list_fetch_failed", detail: String(e?.message || e) };
     }
@@ -1346,7 +1979,18 @@
     renderMenu(result);
   }
 
+  function refreshMenuPosition() {
+    if (!menuEl || menuEl.dataset.hidden !== "false") return;
+    const anchor = getMenuRefreshAnchor();
+    if (anchor) {
+      showMenuNear(anchor);
+    }
+  }
+
   function tryOpenMenuFromFocusTarget(target, eventObj) {
+    if (menuEl && target instanceof Node && menuEl.contains(target)) {
+      return false;
+    }
     const eligibleTarget = findEligibleInputTarget(target, eventObj);
     if (!eligibleTarget) {
       return false;
@@ -1364,6 +2008,9 @@
 
   document.addEventListener("focusin", (e) => {
     const target = e.target;
+    if (menuEl && target instanceof Node && menuEl.contains(target)) {
+      return;
+    }
     if (tryOpenMenuFromFocusTarget(target, e)) {
       return;
     }
@@ -1378,6 +2025,9 @@
   document.addEventListener(
     "focus",
     (e) => {
+      if (menuEl && e.target instanceof Node && menuEl.contains(e.target)) {
+        return;
+      }
       tryOpenMenuFromFocusTarget(e.target, e);
     },
     true
@@ -1386,6 +2036,9 @@
   document.addEventListener("focusout", () => {
     setTimeout(() => {
       const focusedInput = getFocusedEligibleInput();
+      if (menuEl && document.activeElement instanceof Node && menuEl.contains(document.activeElement)) {
+        return;
+      }
       if (focusedInput) {
         if (focusedInput === activeInput && menuEl && menuEl.dataset.hidden === "false") {
           return;
@@ -1433,6 +2086,18 @@
       lastAuthErrorMessage = "";
       hideMenu({ force: true });
     }
+  });
+
+  window.addEventListener(
+    "scroll",
+    () => {
+      refreshMenuPosition();
+    },
+    true
+  );
+
+  window.addEventListener("resize", () => {
+    refreshMenuPosition();
   });
 
   if (shouldShowMenuEvenIfEmpty()) {

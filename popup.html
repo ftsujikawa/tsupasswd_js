@@ -31,12 +31,17 @@
       color: #555;
       margin-bottom: 6px;
     }
+    .host-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .host-row > button { flex: 1; min-width: 120px; }
   </style>
 </head>
 <body>
   <h3>tsupasswd bridge</h3>
+  <div class="host-row">
+    <button id="connect">Connect Passkey Host</button>
+    <button id="connectVault">Connect Vault Host</button>
+  </div>
   <div>
-    <button id="connect">Connect</button>
     <button id="send">Send Ping</button>
     <button id="list">List Passkeys</button>
     <button id="clear">Clear</button>
@@ -80,6 +85,45 @@
   <div>
     <button id="add">Add</button>
     <button id="remove">Remove by id</button>
+  </div>
+
+  <div class="section-title">Vault Login 一覧</div>
+  <div>
+    <button id="vaultStatus">Vault Status</button>
+    <button id="vaultList">List Vault Logins</button>
+    <button id="vaultResync">Resync</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>title</th>
+          <th>username</th>
+          <th>url</th>
+          <th>itemId</th>
+        </tr>
+      </thead>
+      <tbody id="vaultRows"></tbody>
+    </table>
+  </div>
+
+  <div class="section-title">Vault Login 編集</div>
+  <div class="row">
+    <input id="vaultTitle" type="text" placeholder="title" />
+    <input id="vaultUsername" type="text" placeholder="username" />
+  </div>
+  <div class="row">
+    <input id="vaultUrl" type="text" placeholder="url" />
+    <input id="vaultItemId" type="text" placeholder="itemId (for update/delete)" />
+  </div>
+  <div class="row">
+    <input id="vaultPassword" type="text" placeholder="password" />
+    <input id="vaultNotes" type="text" placeholder="notes" />
+  </div>
+  <div>
+    <button id="vaultSave">Save Vault Login</button>
+    <button id="vaultUpdate">Update Vault Login</button>
+    <button id="vaultDelete">Delete Vault Login</button>
   </div>
 
   <label for="payload">Payload JSON</label>

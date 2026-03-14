@@ -10,16 +10,7 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "*://webauthn.io/*",
-        "*://*.webauthn.io/*",
-        "*://passkeys.io/*",
-        "*://*.passkeys.io/*",
-        "*://passkey.org/*",
-        "*://*.passkey.org/*",
-        "*://passkeys-demo.appspot.com/*",
-        "*://*.passkeys-demo.appspot.com/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": ["content-script.js"],
       "run_at": "document_idle",
       "all_frames": true
@@ -28,16 +19,7 @@
   "web_accessible_resources": [
     {
       "resources": ["page-passkeys-demo-hook.js"],
-      "matches": [
-        "*://webauthn.io/*",
-        "*://*.webauthn.io/*",
-        "*://passkeys.io/*",
-        "*://*.passkeys.io/*",
-        "*://passkey.org/*",
-        "*://*.passkey.org/*",
-        "*://passkeys-demo.appspot.com/*",
-        "*://*.passkeys-demo.appspot.com/*"
-      ]
+      "matches": ["<all_urls>"]
     }
   ],
   "action": {

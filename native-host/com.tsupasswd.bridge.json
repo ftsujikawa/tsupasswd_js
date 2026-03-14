@@ -1,9 +1,9 @@
 {
   "name": "com.tsupasswd.bridge",
   "description": "Bridge host for tsupasswd chrome extension",
-  "path": "C:\\AppPackages\\tsupasswd_js\\native-host\\BridgeHost\\bin\\Release\\net8.0-windows\\win-x64\\publish\\tsupasswd-bridge-host.exe",
+  "path": "C:\\AppPackages\\passkeymanager\\tsupasswd_js\\native-host\\BridgeHost\\bin\\Release\\net8.0-windows\\win-x64\\publish\\tsupasswd-bridge-host.exe",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://khcgmggnifgegehckhiaodlnackcnoop/"
+    "chrome-extension://cmodllncabncibkbleljmljfkehgkopn/"
   ]
 }

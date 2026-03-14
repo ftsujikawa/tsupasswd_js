@@ -1,0 +1,15 @@
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\tsupasswd-vault-host.exe
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\tsupasswd-vault-host.deps.json
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\tsupasswd-vault-host.runtimeconfig.json
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\tsupasswd-vault-host.dll
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\tsupasswd-vault-host.pdb
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\VaultHost.GeneratedMSBuildEditorConfig.editorconfig
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\VaultHost.AssemblyInfoInputs.cache
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\VaultHost.AssemblyInfo.cs
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\VaultHost.csproj.CoreCompileInputs.cache
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\VaultHost.sourcelink.json
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\tsupasswd-vault-host.dll
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\refint\tsupasswd-vault-host.dll
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\tsupasswd-vault-host.pdb
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\VaultHost.genruntimeconfig.cache
+C:\AppPackages\tsupasswd_js\native-host\VaultHost\obj\Release\net8.0\ref\tsupasswd-vault-host.dll

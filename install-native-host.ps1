@@ -2,6 +2,7 @@ param(
   [string]$ExtensionId = "khcgmggnifgegehckhiaodlnackcnoop",
   [string]$SourceHostExePath = (Join-Path $PSScriptRoot "native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.exe"),
   [string]$VaultHostExePath = (Join-Path $PSScriptRoot "native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.exe"),
+  [string]$CoreExePath = "",
   [string]$AppDataRoot = (Join-Path $env:LOCALAPPDATA "tsupasswd")
 )
 
@@ -67,29 +68,38 @@ New-Item -Path $edgeRegistryPath -Force | Out-Null
 Set-Item -Path $edgeRegistryPath -Value $manifestPath
 
 if (-not (Test-Path -LiteralPath $VaultHostExePath)) {
-  throw "Vault host EXE was not found: $VaultHostExePath"
-}
-
-$vaultSourcePublishDir = Split-Path -Parent $VaultHostExePath
-$vaultInstallDir = Join-Path $AppDataRoot "vault-host"
-New-Item -ItemType Directory -Path $vaultInstallDir -Force | Out-Null
-
-$vaultFilesToCopy = @(
-  "tsupasswd-vault-host.exe",
-  "tsupasswd-vault-host.dll",
-  "tsupasswd-vault-host.deps.json",
-  "tsupasswd-vault-host.runtimeconfig.json"
-)
-
-foreach ($file in $vaultFilesToCopy) {
-  $src = Join-Path $vaultSourcePublishDir $file
-  if (-not (Test-Path -LiteralPath $src)) {
-    throw "Required vault host file is missing: $src"
+  if ([string]::IsNullOrWhiteSpace($CoreExePath)) {
+    throw "Vault host EXE was not found: $VaultHostExePath"
   }
-  Copy-Item -LiteralPath $src -Destination (Join-Path $vaultInstallDir $file) -Force
 }
 
-$installedVaultExePath = Join-Path $vaultInstallDir "tsupasswd-vault-host.exe"
+if (-not [string]::IsNullOrWhiteSpace($CoreExePath)) {
+  if (-not (Test-Path -LiteralPath $CoreExePath)) {
+    throw "Core EXE was not found: $CoreExePath"
+  }
+  $installedVaultExePath = $CoreExePath
+} else {
+  $vaultSourcePublishDir = Split-Path -Parent $VaultHostExePath
+  $vaultInstallDir = Join-Path $AppDataRoot "vault-host"
+  New-Item -ItemType Directory -Path $vaultInstallDir -Force | Out-Null
+
+  $vaultFilesToCopy = @(
+    "tsupasswd-vault-host.exe",
+    "tsupasswd-vault-host.dll",
+    "tsupasswd-vault-host.deps.json",
+    "tsupasswd-vault-host.runtimeconfig.json"
+  )
+
+  foreach ($file in $vaultFilesToCopy) {
+    $src = Join-Path $vaultSourcePublishDir $file
+    if (-not (Test-Path -LiteralPath $src)) {
+      throw "Required vault host file is missing: $src"
+    }
+    Copy-Item -LiteralPath $src -Destination (Join-Path $vaultInstallDir $file) -Force
+  }
+
+  $installedVaultExePath = Join-Path $vaultInstallDir "tsupasswd-vault-host.exe"
+}
 
 $vaultManifestPath = Join-Path $AppDataRoot "$vaultHostName.json"
 $vaultManifest = [ordered]@{

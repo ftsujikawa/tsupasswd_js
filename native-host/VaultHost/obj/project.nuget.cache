@@ -1,8 +1,14 @@
 {
   "version": 2,
+<<<<<<< HEAD
   "dgSpecHash": "8Y8PkP/QFNc=",
   "success": true,
   "projectFilePath": "C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\VaultHost\\VaultHost.csproj",
+=======
+  "dgSpecHash": "wG9f5bIWMf0=",
+  "success": true,
+  "projectFilePath": "C:\\AppPackages\\tsupasswd_js\\native-host\\VaultHost\\VaultHost.csproj",
+>>>>>>> 3fa5dabf205b86e8a546dd1bb8411b4109453af4
   "expectedPackageFiles": [],
   "logs": []
 }

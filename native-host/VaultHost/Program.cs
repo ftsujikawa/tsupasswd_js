@@ -72,6 +72,11 @@ internal sealed class NativeMessagingVaultHost
             return await HandleResyncAsync(id, command, payload, cancellationToken);
         }
 
+        if (string.Equals(command, "vault.sync.push", StringComparison.OrdinalIgnoreCase))
+        {
+            return await HandlePushAsync(id, command, payload, cancellationToken);
+        }
+
         if (string.Equals(command, "vault.login.list", StringComparison.OrdinalIgnoreCase))
         {
             var includeDeleted = GetOptionalBool(payload, "includeDeleted") ?? false;
@@ -104,6 +109,14 @@ internal sealed class NativeMessagingVaultHost
             };
             store.items = store.items.Append(item).ToArray();
             SaveStore(store);
+
+            var resync = GetOptionalBool(payload, "resync") ?? false;
+            if (resync)
+            {
+                var syncResult = await PushStoreAsync(payload, cancellationToken);
+                return new { ok = true, id, command, result = new { itemId = item.itemId, sync = syncResult } };
+            }
+
             return new { ok = true, id, command, result = new { itemId = item.itemId } };
         }
 
@@ -132,6 +145,14 @@ internal sealed class NativeMessagingVaultHost
             existing.updatedAt = now;
             store.items[index] = existing;
             SaveStore(store);
+
+            var resync = GetOptionalBool(payload, "resync") ?? false;
+            if (resync)
+            {
+                var syncResult = await PushStoreAsync(payload, cancellationToken);
+                return new { ok = true, id, command, result = new { itemId = existing.itemId, sync = syncResult } };
+            }
+
             return new { ok = true, id, command, result = new { itemId = existing.itemId } };
         }
 
@@ -155,6 +176,14 @@ internal sealed class NativeMessagingVaultHost
             existing.updatedAt = DateTimeOffset.UtcNow;
             store.items[index] = existing;
             SaveStore(store);
+
+            var resync = GetOptionalBool(payload, "resync") ?? false;
+            if (resync)
+            {
+                var syncResult = await PushStoreAsync(payload, cancellationToken);
+                return new { ok = true, id, command, result = new { itemId = existing.itemId, sync = syncResult } };
+            }
+
             return new { ok = true, id, command, result = new { itemId = existing.itemId } };
         }
 
@@ -352,6 +381,172 @@ internal sealed class NativeMessagingVaultHost
         };
     }
 
+    private async Task<object> HandlePushAsync(string id, string command, JsonElement payload, CancellationToken cancellationToken)
+    {
+        var syncResult = await PushStoreAsync(payload, cancellationToken);
+        if (syncResult is null)
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_push_failed",
+                detail = "push failed"
+            };
+        }
+
+        var okProp = syncResult is JsonElement el
+            && el.TryGetProperty("ok", out var okEl)
+            && (okEl.ValueKind == JsonValueKind.True || okEl.ValueKind == JsonValueKind.False)
+            ? okEl.GetBoolean()
+            : false;
+
+        return new
+        {
+            ok = okProp,
+            id,
+            command,
+            result = syncResult
+        };
+    }
+
+    private async Task<JsonElement?> PushStoreAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var baseUrl =
+            GetOptionalString(payload, "baseUrl")
+            ?? Environment.GetEnvironmentVariable("TSUPASSWD_SYNC_BASE_URL")
+            ?? "http://127.0.0.1:8088";
+
+        baseUrl = NormalizeBaseUrl(baseUrl);
+
+        var email =
+            GetOptionalString(payload, "email")
+            ?? Environment.GetEnvironmentVariable("TSUPASSWD_SYNC_EMAIL")
+            ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return JsonDocument.Parse("{\"ok\":false,\"error\":\"invalid_argument\",\"detail\":\"email is required. Set payload.email or TSUPASSWD_SYNC_EMAIL.\"}").RootElement;
+        }
+
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var loginUrl = CombineUrl(baseUrl, "/v1/auth/dev/login");
+        var getVaultUrl = CombineUrl(baseUrl, $"/v1/vaults/{Uri.EscapeDataString(normalizedEmail)}");
+
+        using var http = new HttpClient();
+        http.Timeout = TimeSpan.FromSeconds(10);
+
+        var loginBody = JsonSerializer.Serialize(new { email = normalizedEmail });
+        using var loginReq = new HttpRequestMessage(HttpMethod.Post, loginUrl)
+        {
+            Content = new StringContent(loginBody, Encoding.UTF8, "application/json")
+        };
+
+        using var loginRes = await http.SendAsync(loginReq, cancellationToken);
+        var loginJson = await loginRes.Content.ReadAsStringAsync(cancellationToken);
+        if (!loginRes.IsSuccessStatusCode)
+        {
+            return JsonDocument.Parse(JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "sync_login_failed",
+                detail = $"HTTP {(int)loginRes.StatusCode}",
+                response = loginJson
+            })).RootElement;
+        }
+
+        var accessToken = ExtractJsonString(loginJson, "access_token");
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            return JsonDocument.Parse(JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "sync_login_failed",
+                detail = "access_token missing in response",
+                response = loginJson
+            })).RootElement;
+        }
+
+        long expectedServerVersion = 0;
+        using (var getReq = new HttpRequestMessage(HttpMethod.Get, getVaultUrl))
+        {
+            getReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            using var getRes = await http.SendAsync(getReq, cancellationToken);
+            var getJson = await getRes.Content.ReadAsStringAsync(cancellationToken);
+            if (getRes.IsSuccessStatusCode)
+            {
+                expectedServerVersion = ExtractJsonInt64(getJson, "server_version") ?? 0;
+            }
+            else if ((int)getRes.StatusCode == 404)
+            {
+                expectedServerVersion = 0;
+            }
+            else
+            {
+                return JsonDocument.Parse(JsonSerializer.Serialize(new
+                {
+                    ok = false,
+                    error = "sync_pull_failed",
+                    detail = $"HTTP {(int)getRes.StatusCode}",
+                    response = getJson
+                })).RootElement;
+            }
+        }
+
+        var store = LoadStore();
+        var storeJson = SerializeStoreToJson(store);
+        var cipherBlobBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(storeJson));
+
+        var putUrl = getVaultUrl;
+        var putBody = JsonSerializer.Serialize(new
+        {
+            expected_server_version = expectedServerVersion,
+            cipher_blob_base64 = cipherBlobBase64
+        });
+
+        using var putReq = new HttpRequestMessage(HttpMethod.Put, putUrl)
+        {
+            Content = new StringContent(putBody, Encoding.UTF8, "application/json")
+        };
+        putReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var putRes = await http.SendAsync(putReq, cancellationToken);
+        var putJson = await putRes.Content.ReadAsStringAsync(cancellationToken);
+        if (putRes.IsSuccessStatusCode)
+        {
+            return JsonDocument.Parse(JsonSerializer.Serialize(new
+            {
+                ok = true,
+                pushed = true,
+                expected_server_version = expectedServerVersion,
+                response = TryParseJson(putJson)
+            })).RootElement;
+        }
+
+        if ((int)putRes.StatusCode == 409)
+        {
+            var serverVer = ExtractJsonInt64(putJson, "server_version");
+            return JsonDocument.Parse(JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "sync_version_conflict",
+                detail = "server version conflict",
+                expected_server_version = expectedServerVersion,
+                server_version = serverVer,
+                response = TryParseJson(putJson)
+            })).RootElement;
+        }
+
+        return JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            ok = false,
+            error = "sync_push_failed",
+            detail = $"HTTP {(int)putRes.StatusCode}",
+            response = TryParseJson(putJson)
+        })).RootElement;
+    }
+
     private static string CombineUrl(string baseUrl, string path)
     {
         var b = (baseUrl ?? string.Empty).TrimEnd('/');
@@ -384,6 +579,47 @@ internal sealed class NativeMessagingVaultHost
         {
             return null;
         }
+    }
+
+    private static long? ExtractJsonInt64(string json, string propertyName)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!root.TryGetProperty(propertyName, out var el)) return null;
+            if (el.ValueKind == JsonValueKind.Number && el.TryGetInt64(out var v)) return v;
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static object TryParseJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.Clone();
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    private static string SerializeStoreToJson(VaultStore store)
+    {
+        var payload = new
+        {
+            version = 1,
+            updatedAtUtc = DateTimeOffset.UtcNow,
+            items = store.items
+        };
+        return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
     }
 
     private VaultStore LoadStore()
@@ -419,13 +655,7 @@ internal sealed class NativeMessagingVaultHost
             Directory.CreateDirectory(dir);
         }
 
-        var payload = new
-        {
-            version = 1,
-            updatedAtUtc = DateTimeOffset.UtcNow,
-            items = store.items
-        };
-        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        var json = SerializeStoreToJson(store);
         File.WriteAllText(path, json);
     }
 

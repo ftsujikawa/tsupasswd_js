@@ -4,10 +4,6 @@
   "path": "C:\\AppPackages\\passkeymanager\\tsupasswd_js\\native-host\\BridgeHost\\bin\\Release\\net8.0-windows\\win-x64\\publish\\tsupasswd-bridge-host.exe",
   "type": "stdio",
   "allowed_origins": [
-<<<<<<< HEAD
     "chrome-extension://icpbdjknnjjehmllloiloacklidodiio/"
-=======
-    "chrome-extension://khcgmggnifgegehckhiaodlnackcnoop/"
->>>>>>> 3fa5dabf205b86e8a546dd1bb8411b4109453af4
   ]
 }

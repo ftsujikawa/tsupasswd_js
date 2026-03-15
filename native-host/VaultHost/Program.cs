@@ -1,3 +1,6 @@
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 var host = new NativeMessagingVaultHost();
@@ -25,7 +28,7 @@ internal sealed class NativeMessagingVaultHost
             object response;
             try
             {
-                response = HandleRequest(request);
+                response = await HandleRequestAsync(request, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -43,7 +46,7 @@ internal sealed class NativeMessagingVaultHost
         }
     }
 
-    private object HandleRequest(JsonElement request)
+    private async Task<object> HandleRequestAsync(JsonElement request, CancellationToken cancellationToken)
     {
         var id = GetOptionalString(request, "id") ?? GetOptionalString(request, "requestId") ?? string.Empty;
         var command = GetOptionalString(request, "command") ?? string.Empty;
@@ -66,8 +69,7 @@ internal sealed class NativeMessagingVaultHost
 
         if (string.Equals(command, "vault.sync.resync", StringComparison.OrdinalIgnoreCase))
         {
-            // For this scaffold, resync is a no-op.
-            return new { ok = true, id, command, result = new { resync = true } };
+            return await HandleResyncAsync(id, command, payload, cancellationToken);
         }
 
         if (string.Equals(command, "vault.login.list", StringComparison.OrdinalIgnoreCase))
@@ -157,6 +159,231 @@ internal sealed class NativeMessagingVaultHost
         }
 
         return new { ok = false, id, command, error = "not_implemented", detail = "Unsupported command." };
+    }
+
+    private async Task<object> HandleResyncAsync(string id, string command, JsonElement payload, CancellationToken cancellationToken)
+    {
+        var baseUrl =
+            GetOptionalString(payload, "baseUrl")
+            ?? Environment.GetEnvironmentVariable("TSUPASSWD_SYNC_BASE_URL")
+            ?? "http://127.0.0.1:8088";
+
+        baseUrl = NormalizeBaseUrl(baseUrl);
+
+        var email =
+            GetOptionalString(payload, "email")
+            ?? Environment.GetEnvironmentVariable("TSUPASSWD_SYNC_EMAIL")
+            ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "invalid_argument",
+                detail = "email is required. Set payload.email or TSUPASSWD_SYNC_EMAIL."
+            };
+        }
+
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var loginUrl = CombineUrl(baseUrl, "/v1/auth/dev/login");
+        var getVaultUrl = CombineUrl(baseUrl, $"/v1/vaults/{Uri.EscapeDataString(normalizedEmail)}");
+
+        using var http = new HttpClient();
+        http.Timeout = TimeSpan.FromSeconds(10);
+
+        var loginBody = JsonSerializer.Serialize(new { email = normalizedEmail });
+        using var loginReq = new HttpRequestMessage(HttpMethod.Post, loginUrl)
+        {
+            Content = new StringContent(loginBody, Encoding.UTF8, "application/json")
+        };
+
+        using var loginRes = await http.SendAsync(loginReq, cancellationToken);
+        var loginJson = await loginRes.Content.ReadAsStringAsync(cancellationToken);
+        if (!loginRes.IsSuccessStatusCode)
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_login_failed",
+                detail = $"HTTP {(int)loginRes.StatusCode}",
+                response = loginJson
+            };
+        }
+
+        var accessToken = ExtractJsonString(loginJson, "access_token");
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_login_failed",
+                detail = "access_token missing in response",
+                response = loginJson
+            };
+        }
+
+        using var vaultReq = new HttpRequestMessage(HttpMethod.Get, getVaultUrl);
+        vaultReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var vaultRes = await http.SendAsync(vaultReq, cancellationToken);
+        var vaultJson = await vaultRes.Content.ReadAsStringAsync(cancellationToken);
+        if (!vaultRes.IsSuccessStatusCode)
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_pull_failed",
+                detail = $"HTTP {(int)vaultRes.StatusCode}",
+                response = vaultJson
+            };
+        }
+
+        string cipherBlobBase64;
+        long serverVersion;
+        string updatedAt;
+        try
+        {
+            using var doc = JsonDocument.Parse(vaultJson);
+            var root = doc.RootElement;
+            cipherBlobBase64 = root.TryGetProperty("cipher_blob_base64", out var blobEl) && blobEl.ValueKind == JsonValueKind.String
+                ? blobEl.GetString() ?? string.Empty
+                : string.Empty;
+            serverVersion = root.TryGetProperty("server_version", out var verEl) && verEl.TryGetInt64(out var v) ? v : -1;
+            updatedAt = root.TryGetProperty("updated_at", out var upEl) && upEl.ValueKind == JsonValueKind.String
+                ? upEl.GetString() ?? string.Empty
+                : string.Empty;
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_pull_failed",
+                detail = $"invalid vault response json: {ex.Message}",
+                response = vaultJson
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(cipherBlobBase64))
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_pull_failed",
+                detail = "cipher_blob_base64 missing in response",
+                server_version = serverVersion,
+                updated_at = updatedAt
+            };
+        }
+
+        // Best-effort: if cipher_blob_base64 is actually a base64-encoded JSON store, decode and apply it.
+        VaultStore? decodedStore = null;
+        string? decodedTextPrefix = null;
+        try
+        {
+            var bytes = Convert.FromBase64String(cipherBlobBase64);
+            var text = Encoding.UTF8.GetString(bytes);
+            decodedTextPrefix = text.Length > 64 ? text.Substring(0, 64) : text;
+
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("items", out var itemsEl) && itemsEl.ValueKind == JsonValueKind.Array)
+            {
+                var items = new List<VaultItem>();
+                foreach (var el in itemsEl.EnumerateArray())
+                {
+                    if (el.ValueKind != JsonValueKind.Object) continue;
+                    items.Add(VaultItem.FromJson(el));
+                }
+                decodedStore = new VaultStore { items = items.ToArray() };
+            }
+        }
+        catch
+        {
+            decodedStore = null;
+        }
+
+        if (decodedStore is null)
+        {
+            return new
+            {
+                ok = false,
+                id,
+                command,
+                error = "sync_cipher_blob_unsupported",
+                detail = "cipher_blob_base64 could not be decoded as a JSON vault-store. It may be encrypted.",
+                result = new
+                {
+                    server_version = serverVersion,
+                    updated_at = updatedAt,
+                    decoded_prefix = decodedTextPrefix
+                }
+            };
+        }
+
+        SaveStore(decodedStore);
+
+        return new
+        {
+            ok = true,
+            id,
+            command,
+            result = new
+            {
+                resync = true,
+                source = "sync-axum-api",
+                server_version = serverVersion,
+                updated_at = updatedAt,
+                applied_item_count = decodedStore.items.Length,
+                storePath = ResolveStorePath()
+            }
+        };
+    }
+
+    private static string CombineUrl(string baseUrl, string path)
+    {
+        var b = (baseUrl ?? string.Empty).TrimEnd('/');
+        var p = (path ?? string.Empty).TrimStart('/');
+        return $"{b}/{p}";
+    }
+
+    private static string NormalizeBaseUrl(string baseUrl)
+    {
+        var b = (baseUrl ?? string.Empty).TrimEnd('/');
+        if (b.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            b = b.Substring(0, b.Length - 3);
+        }
+        return b;
+    }
+
+    private static string? ExtractJsonString(string json, string propertyName)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!root.TryGetProperty(propertyName, out var el)) return null;
+            if (el.ValueKind != JsonValueKind.String) return null;
+            return el.GetString();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private VaultStore LoadStore()

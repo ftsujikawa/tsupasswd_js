@@ -31,6 +31,11 @@ const vaultDeleteBtn = document.getElementById("vaultDelete");
 let lastPasskeys = [];
 let lastVaultItems = [];
 
+globalThis.__TSUPASSWD_POPUP_JS_VERSION = "2026-03-14T21:50+09:00";
+try {
+  console.log("[tsupasswd] popup.js loaded", globalThis.__TSUPASSWD_POPUP_JS_VERSION);
+} catch {}
+
 function selectVaultItem(item) {
   vaultItemIdEl.value = escapeText(item?.itemId);
   vaultTitleEl.value = escapeText(item?.title);
@@ -41,6 +46,12 @@ function selectVaultItem(item) {
 }
 
 function setResult(value) {
+  if (!resultEl) {
+    try {
+      console.error("Result element not found", value);
+    } catch {}
+    return;
+  }
   resultEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
@@ -185,7 +196,8 @@ async function refreshList() {
   setResult(res ?? { ok: false, error: "No response" });
 }
 
-async function refreshVaultList() {
+async function refreshVaultList(options = {}) {
+  const suppressResult = options?.suppressResult === true;
   const payload = buildVaultPayload("vault.login.list", {
     includeDeleted: false,
     requestId: `vault-list-${Date.now()}`
@@ -198,7 +210,9 @@ async function refreshVaultList() {
     if (!(vaultItemIdEl.value ?? "").trim() && lastVaultItems.length === 1) {
       selectVaultItem(lastVaultItems[0]);
     }
-    setResult({ ok: true, native: res.payload });
+    if (!suppressResult) {
+      setResult({ ok: true, native: res.payload });
+    }
     return;
   }
   if (res?.ok && Array.isArray(res?.raw?.result?.items)) {
@@ -207,10 +221,14 @@ async function refreshVaultList() {
     if (!(vaultItemIdEl.value ?? "").trim() && lastVaultItems.length === 1) {
       selectVaultItem(lastVaultItems[0]);
     }
-    setResult({ ok: true, native: res.raw });
+    if (!suppressResult) {
+      setResult({ ok: true, native: res.raw });
+    }
     return;
   }
-  setResult(res ?? { ok: false, error: "No response" });
+  if (!suppressResult) {
+    setResult(res ?? { ok: false, error: "No response" });
+  }
 }
 
 async function initListByActiveTabUrl() {
@@ -230,166 +248,250 @@ async function initListByActiveTabUrl() {
   }
 }
 
-connectBtn.addEventListener("click", async () => {
-  setResult(await sendMessage({ type: "connect-native", target: "passkey" }));
-});
-
-connectVaultBtn.addEventListener("click", async () => {
-  setResult(await sendMessage({ type: "vault-connect" }));
-});
-
-sendBtn.addEventListener("click", async () => {
-  let parsed;
-  try {
-    parsed = JSON.parse(payloadEl.value);
-  } catch (e) {
-    setResult({ ok: false, error: `Invalid JSON: ${String(e)}` });
-    return;
+try {
+  if (connectBtn) {
+    connectBtn.addEventListener("click", async () => {
+      setResult(await sendMessage({ type: "connect-native", target: "passkey" }));
+    });
   }
 
-  const target = parsed?.command?.startsWith("vault.") ? "vault" : "passkey";
-  setResult(await sendNative(parsed, target));
-});
-
-listBtn.addEventListener("click", async () => {
-  await refreshList();
-});
-
-clearBtn.addEventListener("click", async () => {
-  const requestId = `clear-${Date.now()}`;
-  const payload = { type: "clear_passkeys", requestId };
-  payloadEl.value = JSON.stringify(payload);
-  setResult(await sendNative(payload, "passkey"));
-});
-
-addBtn.addEventListener("click", async () => {
-  const requestId = `add-${Date.now()}`;
-  const payload = {
-    type: "add_passkey",
-    requestId,
-    passkey: {
-      id: (pkIdEl.value ?? "").trim() || undefined,
-      title: (pkTitleEl.value ?? "").trim() || undefined,
-      rpId: (pkRpIdEl.value ?? "").trim() || undefined,
-      user: (pkUserEl.value ?? "").trim() || undefined
-    }
-  };
-  payloadEl.value = JSON.stringify(payload);
-  setResult(await sendNative(payload, "passkey"));
-});
-
-removeBtn.addEventListener("click", async () => {
-  const id = (pkIdEl.value ?? "").trim();
-  if (!id) {
-    setResult({ ok: false, error: "id is required." });
-    return;
+  if (connectVaultBtn) {
+    connectVaultBtn.addEventListener("click", async () => {
+      setResult(await sendMessage({ type: "vault-connect" }));
+    });
   }
-  const requestId = `remove-${Date.now()}`;
-  const payload = { type: "remove_passkey", requestId, id };
-  payloadEl.value = JSON.stringify(payload);
-  setResult(await sendNative(payload, "passkey"));
-});
 
-vaultStatusBtn.addEventListener("click", async () => {
-  const payload = buildVaultPayload("vault.status.get", { requestId: `vault-status-${Date.now()}` });
-  payloadEl.value = JSON.stringify(payload, null, 2);
-  const res = await sendNativeAwait(payload, "vault");
-  setResult(res?.raw ?? res);
-});
+  if (sendBtn) {
+    sendBtn.addEventListener("click", async () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(payloadEl?.value ?? "");
+      } catch (e) {
+        setResult({ ok: false, error: `Invalid JSON: ${String(e)}` });
+        return;
+      }
 
-vaultListBtn.addEventListener("click", async () => {
-  await refreshVaultList();
-});
-
-vaultResyncBtn.addEventListener("click", async () => {
-  const payload = buildVaultPayload("vault.sync.resync", { requestId: `vault-resync-${Date.now()}` });
-  payloadEl.value = JSON.stringify(payload, null, 2);
-  const res = await sendNativeAwait(payload, "vault");
-  setResult(res?.raw ?? res);
-  if (res?.ok) {
-    await refreshVaultList();
+      const target = parsed?.command?.startsWith("vault.") ? "vault" : "passkey";
+      setResult(await sendNative(parsed, target));
+    });
   }
-});
 
-vaultSaveBtn.addEventListener("click", async () => {
-  const payload = buildVaultPayload("vault.login.save", {
-    title: (vaultTitleEl.value ?? "").trim(),
-    username: (vaultUsernameEl.value ?? "").trim(),
-    password: (vaultPasswordEl.value ?? "").trim(),
-    url: (vaultUrlEl.value ?? "").trim(),
-    notes: (vaultNotesEl.value ?? "").trim(),
-    resync: true,
-    requestId: `vault-save-${Date.now()}`
-  });
-  payloadEl.value = JSON.stringify(payload, null, 2);
-  const res = await sendNativeAwait(payload, "vault");
-  setResult(res?.raw ?? res);
-  if (res?.ok) {
-    vaultPasswordEl.value = "";
-    await refreshVaultList();
+  if (listBtn) {
+    listBtn.addEventListener("click", async () => {
+      await refreshList();
+    });
   }
-});
 
-vaultUpdateBtn.addEventListener("click", async () => {
-  const itemId = (vaultItemIdEl.value ?? "").trim();
-  if (!itemId) {
-    setResult({ ok: false, error: "itemId is required." });
-    return;
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      const requestId = `clear-${Date.now()}`;
+      const payload = { type: "clear_passkeys", requestId };
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload);
+      }
+      setResult(await sendNative(payload, "passkey"));
+    });
   }
-  const payload = buildVaultPayload("vault.login.update", {
-    itemId,
-    title: (vaultTitleEl.value ?? "").trim(),
-    username: (vaultUsernameEl.value ?? "").trim(),
-    password: (vaultPasswordEl.value ?? "").trim(),
-    url: (vaultUrlEl.value ?? "").trim(),
-    notes: (vaultNotesEl.value ?? "").trim(),
-    resync: true,
-    requestId: `vault-update-${Date.now()}`
-  });
-  payloadEl.value = JSON.stringify(payload, null, 2);
-  const res = await sendNativeAwait(payload, "vault");
-  setResult(res?.raw ?? res);
-  if (res?.ok) {
-    vaultPasswordEl.value = "";
-    await refreshVaultList();
-  }
-});
 
-vaultDeleteBtn.addEventListener("click", async () => {
-  const itemId = (vaultItemIdEl.value ?? "").trim();
-  if (!itemId) {
-    setResult({ ok: false, error: "itemId is required." });
-    return;
+  if (addBtn) {
+    addBtn.addEventListener("click", async () => {
+      const requestId = `add-${Date.now()}`;
+      const payload = {
+        type: "add_passkey",
+        requestId,
+        passkey: {
+          id: (pkIdEl?.value ?? "").trim() || undefined,
+          title: (pkTitleEl?.value ?? "").trim() || undefined,
+          rpId: (pkRpIdEl?.value ?? "").trim() || undefined,
+          user: (pkUserEl?.value ?? "").trim() || undefined
+        }
+      };
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload);
+      }
+      setResult(await sendNative(payload, "passkey"));
+    });
   }
-  const payload = buildVaultPayload("vault.login.delete", {
-    itemId,
-    resync: true,
-    requestId: `vault-delete-${Date.now()}`
-  });
-  payloadEl.value = JSON.stringify(payload, null, 2);
-  const res = await sendNativeAwait(payload, "vault");
-  setResult(res?.raw ?? res);
-  if (res?.ok) {
-    await refreshVaultList();
+
+  if (removeBtn) {
+    removeBtn.addEventListener("click", async () => {
+      const id = (pkIdEl?.value ?? "").trim();
+      if (!id) {
+        setResult({ ok: false, error: "id is required." });
+        return;
+      }
+      const requestId = `remove-${Date.now()}`;
+      const payload = { type: "remove_passkey", requestId, id };
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload);
+      }
+      setResult(await sendNative(payload, "passkey"));
+    });
   }
-});
 
-searchEl.addEventListener("input", () => {
-  renderPasskeys();
-});
+  if (vaultStatusBtn) {
+    vaultStatusBtn.addEventListener("click", async () => {
+      const payload = buildVaultPayload("vault.status.get", { requestId: `vault-status-${Date.now()}` });
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      const res = await sendNativeAwait(payload, "vault");
+      setResult(res?.raw ?? res);
+    });
+  }
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === "native-response") {
-    const payload = msg.payload;
-    if (msg?.target === "passkey" && payload && typeof payload === "object" && Array.isArray(payload.passkeys)) {
-      lastPasskeys = payload.passkeys;
+  if (vaultListBtn) {
+    vaultListBtn.addEventListener("click", async () => {
+      await refreshVaultList();
+    });
+  }
+
+  if (vaultResyncBtn) {
+    vaultResyncBtn.addEventListener("click", async () => {
+      let payload = buildVaultPayload("vault.sync.resync", { requestId: `vault-resync-${Date.now()}` });
+      if (payloadEl) {
+        const text = (payloadEl.value ?? "").trim();
+        if (text) {
+          try {
+            const edited = JSON.parse(text);
+            if (edited && typeof edited === "object") {
+              if (edited.command === "vault.sync.resync") {
+                payload = {
+                  ...payload,
+                  ...edited,
+                  payload: {
+                    ...(payload.payload ?? {}),
+                    ...(edited.payload ?? {})
+                  }
+                };
+              } else {
+                payload = {
+                  ...payload,
+                  payload: {
+                    ...(payload.payload ?? {}),
+                    ...(edited.payload ?? {}),
+                    ...edited
+                  }
+                };
+              }
+            }
+          } catch {
+          }
+        }
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      setResult({ ok: true, state: "running", command: payload.command, id: payload.id });
+      try {
+        const res = await sendNativeAwait(payload, "vault");
+        setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
+        if (res?.ok) {
+          await refreshVaultList({ suppressResult: true });
+        }
+      } catch (e) {
+        setResult({ ok: false, error: String(e?.message ?? e) });
+      }
+    });
+  }
+
+  if (vaultSaveBtn) {
+    vaultSaveBtn.addEventListener("click", async () => {
+      const payload = buildVaultPayload("vault.login.save", {
+        title: (vaultTitleEl?.value ?? "").trim(),
+        username: (vaultUsernameEl?.value ?? "").trim(),
+        password: (vaultPasswordEl?.value ?? "").trim(),
+        url: (vaultUrlEl?.value ?? "").trim(),
+        notes: (vaultNotesEl?.value ?? "").trim(),
+        resync: true,
+        requestId: `vault-save-${Date.now()}`
+      });
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      const res = await sendNativeAwait(payload, "vault");
+      setResult(res?.raw ?? res);
+      if (res?.ok && vaultPasswordEl) {
+        vaultPasswordEl.value = "";
+        await refreshVaultList();
+      }
+    });
+  }
+
+  if (vaultUpdateBtn) {
+    vaultUpdateBtn.addEventListener("click", async () => {
+      const itemId = (vaultItemIdEl?.value ?? "").trim();
+      if (!itemId) {
+        setResult({ ok: false, error: "itemId is required." });
+        return;
+      }
+      const payload = buildVaultPayload("vault.login.update", {
+        itemId,
+        title: (vaultTitleEl?.value ?? "").trim(),
+        username: (vaultUsernameEl?.value ?? "").trim(),
+        password: (vaultPasswordEl?.value ?? "").trim(),
+        url: (vaultUrlEl?.value ?? "").trim(),
+        notes: (vaultNotesEl?.value ?? "").trim(),
+        resync: true,
+        requestId: `vault-update-${Date.now()}`
+      });
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      const res = await sendNativeAwait(payload, "vault");
+      setResult(res?.raw ?? res);
+      if (res?.ok && vaultPasswordEl) {
+        vaultPasswordEl.value = "";
+        await refreshVaultList();
+      }
+    });
+  }
+
+  if (vaultDeleteBtn) {
+    vaultDeleteBtn.addEventListener("click", async () => {
+      const itemId = (vaultItemIdEl?.value ?? "").trim();
+      if (!itemId) {
+        setResult({ ok: false, error: "itemId is required." });
+        return;
+      }
+      const payload = buildVaultPayload("vault.login.delete", {
+        itemId,
+        resync: true,
+        requestId: `vault-delete-${Date.now()}`
+      });
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      const res = await sendNativeAwait(payload, "vault");
+      setResult(res?.raw ?? res);
+      if (res?.ok) {
+        await refreshVaultList();
+      }
+    });
+  }
+
+  if (searchEl) {
+    searchEl.addEventListener("input", () => {
       renderPasskeys();
-    }
-    setResult({ ok: true, target: msg?.target, native: payload });
+    });
   }
-  if (msg?.type === "native-error") {
-    setResult({ ok: false, target: msg?.target, error: msg.error });
-  }
-});
 
-initListByActiveTabUrl();
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === "native-response") {
+      const payload = msg.payload;
+      if (msg?.target === "passkey" && payload && typeof payload === "object" && Array.isArray(payload.passkeys)) {
+        lastPasskeys = payload.passkeys;
+        renderPasskeys();
+      }
+      if (msg?.target === "vault" && payload && typeof payload === "object" && Array.isArray(payload.result?.items)) {
+        lastVaultItems = payload.result.items;
+        renderVaultItems();
+      }
+    }
+    if (msg?.type === "native-error") {
+      setResult({ ok: false, target: msg?.target, error: msg.error });
+    }
+  });
+
+  initListByActiveTabUrl();
+} catch (e) {
+  setResult({ ok: false, error: String(e?.message ?? e) });
+}

@@ -1,7 +1,7 @@
 param(
   [string]$ExtensionId = "khcgmggnifgegehckhiaodlnackcnoop",
   [string]$SourceHostExePath = (Join-Path $PSScriptRoot "native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.exe"),
-  [string]$VaultHostExePath = (Join-Path $PSScriptRoot "native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.exe"),
+  [string]$VaultHostExePath = (Join-Path $PSScriptRoot "native-host\VaultHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-vault-host.exe"),
   [string]$CoreExePath = "",
   [string]$AppDataRoot = (Join-Path $env:LOCALAPPDATA "tsupasswd")
 )
@@ -68,6 +68,10 @@ New-Item -Path $edgeRegistryPath -Force | Out-Null
 Set-Item -Path $edgeRegistryPath -Value $manifestPath
 
 if (-not (Test-Path -LiteralPath $VaultHostExePath)) {
+  $legacyVaultHostExePath = (Join-Path $PSScriptRoot "native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.exe")
+  if (Test-Path -LiteralPath $legacyVaultHostExePath) {
+    $VaultHostExePath = $legacyVaultHostExePath
+  }
   if ([string]::IsNullOrWhiteSpace($CoreExePath)) {
     throw "Vault host EXE was not found: $VaultHostExePath"
   }

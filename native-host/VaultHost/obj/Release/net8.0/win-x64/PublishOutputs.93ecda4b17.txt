@@ -1,0 +1,5 @@
+c:\AppPackages\PasskeyManager\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.exe
+c:\AppPackages\PasskeyManager\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.dll
+c:\AppPackages\PasskeyManager\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.deps.json
+c:\AppPackages\PasskeyManager\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.runtimeconfig.json
+c:\AppPackages\PasskeyManager\tsupasswd_js\native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.pdb

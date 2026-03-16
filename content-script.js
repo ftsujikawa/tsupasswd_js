@@ -3216,9 +3216,15 @@
           });
           const list = Array.isArray(forced.passkeys) ? forced.passkeys : [];
           for (const p of list) {
-            const id = String(p?.id || "");
-            if (!id) continue;
-            if (!seen.has(id)) seen.set(id, p);
+            const id = String(p?.id || "").trim();
+            const key = id
+              ? id
+              : `noid:${normalizeSource(p?.source)}:${String(p?.rpId || "").trim().toLowerCase()}:${String(
+                  p?.user || ""
+                ).trim().toLowerCase()}:${String(p?.title || "").trim().toLowerCase()}:${String(p?.url || "")
+                  .trim()
+                  .toLowerCase()}`;
+            if (!seen.has(key)) seen.set(key, p);
           }
         }
 
@@ -3240,7 +3246,14 @@
           const merged = new Map();
           const baseList = Array.isArray(result?.passkeys) ? result.passkeys : [];
           for (const p of baseList) {
-            const key = `${normalizeSource(p?.source)}:${String(p?.id ?? "")}`;
+            const id = String(p?.id ?? "").trim();
+            const key = id
+              ? `${normalizeSource(p?.source)}:${id}`
+              : `noid:${normalizeSource(p?.source)}:${String(p?.rpId || "").trim().toLowerCase()}:${String(
+                  p?.user || ""
+                ).trim().toLowerCase()}:${String(p?.title || "").trim().toLowerCase()}:${String(p?.url || "")
+                  .trim()
+                  .toLowerCase()}`;
             if (!merged.has(key)) merged.set(key, p);
           }
 
@@ -3266,7 +3279,14 @@
             });
             const list = Array.isArray(forced.passkeys) ? forced.passkeys : [];
             for (const p of list) {
-              const key = `${normalizeSource(p?.source)}:${String(p?.id ?? "")}`;
+              const id = String(p?.id ?? "").trim();
+              const key = id
+                ? `${normalizeSource(p?.source)}:${id}`
+                : `noid:${normalizeSource(p?.source)}:${String(p?.rpId || "").trim().toLowerCase()}:${String(
+                    p?.user || ""
+                  ).trim().toLowerCase()}:${String(p?.title || "").trim().toLowerCase()}:${String(p?.url || "")
+                    .trim()
+                    .toLowerCase()}`;
               if (!merged.has(key)) merged.set(key, p);
             }
           }

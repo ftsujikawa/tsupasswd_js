@@ -92,6 +92,25 @@ function getCachedVaultPassword(item) {
   return String(vaultPasswordCache?.[itemId] ?? "");
 }
 
+async function fetchVaultPasswordIntoCache(itemId) {
+  const id = String(itemId ?? "").trim();
+  if (!id) return { ok: false, error: "itemId is required" };
+  const payload = buildVaultPayload("vault.login.get", {
+    itemId: id,
+    includeSecret: true,
+    requestId: `vault-get-${Date.now()}`
+  });
+  const res = await sendNativeAwait(payload, "vault");
+  const native = res?.payload ?? res?.raw ?? res;
+  const item = native?.result?.item ?? native?.item ?? null;
+  const pwd = String(item?.password ?? "");
+  if (!pwd.trim()) {
+    return { ok: false, error: "password_missing", native };
+  }
+  const saved = await setCachedVaultPassword(id, pwd);
+  return { ok: saved, itemId: id, saved, native };
+}
+
 async function loadVaultPasswordCache() {
   return await new Promise((resolve) => {
     try {
@@ -247,24 +266,39 @@ function renderVaultItems() {
     const masked = password ? "••••••" : "";
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
-    copyBtn.textContent = password ? "Copy" : "";
-    copyBtn.disabled = !password;
+    copyBtn.textContent = password ? "Copy" : "Get";
+    copyBtn.disabled = false;
     copyBtn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!password) return;
+      let current = String(getCachedVaultPassword(item) || item?.password || "");
+      if (!current.trim()) {
+        try {
+          setResult({ ok: true, state: "running", action: "vault.login.get", itemId: item?.itemId ?? "" });
+          const fetched = await fetchVaultPasswordIntoCache(item?.itemId ?? "");
+          if (!fetched?.ok) {
+            setResult({ ok: false, action: "vault.login.get", itemId: item?.itemId ?? "", fetched });
+            return;
+          }
+          vaultPasswordCache = await loadVaultPasswordCache();
+          current = String(getCachedVaultPassword(item) || "");
+          await refreshVaultList({ suppressResult: true });
+        } catch (err) {
+          setResult({ ok: false, action: "vault.login.get", error: String(err?.message ?? err) });
+          return;
+        }
+      }
+      if (!current.trim()) return;
       try {
-        await navigator.clipboard.writeText(password);
+        await navigator.clipboard.writeText(current);
         setResult({ ok: true, action: "vault.password.copy", itemId: item?.itemId ?? "" });
       } catch (err) {
         setResult({ ok: false, action: "vault.password.copy", error: String(err?.message ?? err) });
       }
     });
     tdPassword.textContent = masked;
-    if (password) {
-      tdPassword.appendChild(document.createTextNode(" "));
-      tdPassword.appendChild(copyBtn);
-    }
+    tdPassword.appendChild(document.createTextNode(masked ? " " : ""));
+    tdPassword.appendChild(copyBtn);
     tr.appendChild(tdPassword);
 
     const tdId = document.createElement("td");
@@ -577,7 +611,7 @@ try {
         password,
         url: inputUrl,
         notes: (vaultNotesEl?.value ?? "").trim(),
-        resync: false,
+        resync: true,
         requestId: `vault-save-${Date.now()}`
       });
       if (payloadEl) {
@@ -661,7 +695,7 @@ try {
         password,
         url: inputUrl,
         notes: (vaultNotesEl?.value ?? "").trim(),
-        resync: false,
+        resync: true,
         requestId: `vault-update-${Date.now()}`
       });
       if (payloadEl) {

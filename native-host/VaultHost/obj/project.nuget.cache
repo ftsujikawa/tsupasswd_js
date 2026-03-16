@@ -1,12 +1,18 @@
 {
   "version": 2,
-<<<<<<< HEAD
   "dgSpecHash": "8Y8PkP/QFNc=",
-=======
-  "dgSpecHash": "8SURnBqeodE=",
->>>>>>> 064cfb89ba78d3b59a1d6fee873554fc26fa56aa
   "success": true,
-  "projectFilePath": "C:\\AppPackages\\passkeymanager\\tsupasswd_js\\native-host\\VaultHost\\VaultHost.csproj",
+  "projectFilePath": "C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\VaultHost\\VaultHost.csproj",
   "expectedPackageFiles": [],
-  "logs": []
+  "logs": [
+    {
+      "code": "Undefined",
+      "level": "Warning",
+      "message": "キャッシュ ファイルの読み取りの問題 C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\VaultHost\\obj\\project.nuget.cache : '<' is an invalid start of a property name. Expected a '\"'. Path: $ | LineNumber: 2 | BytePositionInLine: 0.",
+      "projectPath": "C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\VaultHost\\VaultHost.csproj",
+      "warningLevel": 1,
+      "filePath": "C:\\AppPackages\\PasskeyManager\\tsupasswd_js\\native-host\\VaultHost\\VaultHost.csproj",
+      "targetGraphs": []
+    }
+  ]
 }

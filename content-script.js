@@ -965,6 +965,7 @@
       const isInteractive =
         target instanceof HTMLElement &&
         (target.closest(".item") ||
+          target.closest(".empty") ||
           target.closest("button") ||
           (target.tagName || "").toLowerCase() === "input" ||
           (target.getAttribute("role") || "").toLowerCase() === "button");
@@ -1304,6 +1305,7 @@
       if (host.startsWith("www.")) set.add(host.slice(4));
     };
 
+    addHost((window.location.hostname || "").trim().toLowerCase());
     addHost(deriveRpIdFromPage());
 
     try {
@@ -1339,7 +1341,21 @@
 
   function deriveRpIdFromUrl(rawUrl) {
     try {
-      const parsed = new URL(String(rawUrl ?? ""), window.location.href);
+      const raw = String(rawUrl ?? "").trim();
+      if (!raw) return "";
+
+      // urlがスキーム無しで保存されるケース（例: www.example.com/path）に対応する。
+      // new URL(raw, base) だと相対URL扱いで現在ホストに吸われるため、明示的に補正する。
+      const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw);
+      const normalized = raw.startsWith("//")
+        ? `https:${raw}`
+        : hasScheme
+          ? raw
+          : raw.includes(".") && !raw.startsWith("/")
+            ? `https://${raw}`
+            : raw;
+
+      const parsed = new URL(normalized, window.location.href);
       return String(parsed.hostname ?? "").trim().toLowerCase();
     } catch {
       return "";
@@ -1561,6 +1577,14 @@
               finish({ ok: false, error: errText });
               return;
             }
+            if (typeof res === "undefined") {
+              finish({
+                ok: false,
+                error: "no_receiver",
+                detail: "Could not establish connection. Receiving end does not exist. (background/service workerが起動していない可能性があります)"
+              });
+              return;
+            }
             if (!res?.ok) {
               finish({ ok: false, error: res?.error || "vault-request-failed", detail: res?.detail });
               return;
@@ -1598,6 +1622,34 @@
         resolve({ ok: false, error: "chrome_runtime_unavailable" });
         return;
       }
+
+      const strictHostRelated = (passkeyRpId, host) => {
+        const normalizeToHost = (value) => {
+          const raw = String(value || "").trim().toLowerCase();
+          if (!raw) return "";
+          try {
+            const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw);
+            const normalized = raw.startsWith("//")
+              ? `https:${raw}`
+              : hasScheme
+                ? raw
+                : raw.includes(".") && !raw.startsWith("/")
+                  ? `https://${raw.replace(/^\/+/, "")}`
+                  : raw;
+            const parsed = new URL(normalized, window.location.href);
+            const h = String(parsed.hostname || "").trim().toLowerCase();
+            if (!h) return raw;
+            return h.startsWith("www.") ? h.slice(4) : h;
+          } catch {
+            return raw.startsWith("www.") ? raw.slice(4) : raw;
+          }
+        };
+
+        const rp = normalizeToHost(passkeyRpId);
+        const h = normalizeToHost(host);
+        if (!rp || !h) return false;
+        return rp === h || rp.endsWith(`.${h}`) || h.endsWith(`.${rp}`);
+      };
 
       const requestId = `cs-vault-list-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       let settled = false;
@@ -1655,35 +1707,77 @@
             }
 
             const native = res?.payload ?? res?.raw;
-            const items = Array.isArray(native?.result?.items) ? native.result.items : [];
+            const items = Array.isArray(native?.result?.items)
+              ? native.result.items
+              : Array.isArray(native?.items)
+                ? native.items
+                : [];
             let host = String(rpId || "").trim().toLowerCase();
             if (host.startsWith("www.")) {
               host = host.slice(4);
             }
             const rawCount = items.length;
-            const mapped = items
-              .map((item) => {
-                const itemRpId = deriveRpIdFromUrl(item?.url);
-                return {
-                  id: String(item?.itemId ?? ""),
-                  title: String(item?.title ?? ""),
-                  rpId: itemRpId,
-                  user: String(item?.username ?? ""),
-                  password: String(item?.password ?? ""),
-                  source: "tsupasswd_core",
-                  vault: true,
+
+            const preMapped = Array.isArray(native?.passkeys)
+              ? native.passkeys
+              : Array.isArray(native?.result?.passkeys)
+                ? native.result.passkeys
+                : null;
+
+            const rawSample = Array.isArray(preMapped)
+              ? preMapped.slice(0, 1).map((p) => ({
+                  rpId: String(p?.rpId ?? ""),
+                  url: String(p?.url ?? ""),
+                  title: String(p?.title ?? ""),
+                  user: String(p?.user ?? p?.username ?? "")
+                }))
+              : items.slice(0, 1).map((item) => ({
+                  rpId: deriveRpIdFromUrl(item?.url),
                   url: String(item?.url ?? ""),
-                  updatedAt: String(item?.updatedAt ?? ""),
-                  createdAt: String(item?.createdAt ?? "")
-                };
-              })
-              .filter((p) => !host || !String(p?.rpId ?? "").trim() || isRpIdRelatedToHost(p?.rpId, host));
+                  title: String(item?.title ?? ""),
+                  user: String(item?.username ?? "")
+                }));
+
+            const mapped = Array.isArray(preMapped)
+              ? preMapped
+                  .map((p) => {
+                    const itemRpId = String(p?.rpId ?? "").trim().toLowerCase() || deriveRpIdFromUrl(p?.url);
+                    return {
+                      ...p,
+                      id: String(p?.id ?? p?.itemId ?? ""),
+                      title: String(p?.title ?? ""),
+                      rpId: itemRpId,
+                      user: String(p?.user ?? p?.username ?? ""),
+                      password: String(p?.password ?? ""),
+                      source: "tsupasswd_core",
+                      vault: true,
+                      url: String(p?.url ?? "")
+                    };
+                  })
+                  .filter((p) => !host || strictHostRelated(p?.rpId, host))
+              : items
+                  .map((item) => {
+                    const itemRpId = deriveRpIdFromUrl(item?.url);
+                    return {
+                      id: String(item?.itemId ?? ""),
+                      title: String(item?.title ?? ""),
+                      rpId: itemRpId,
+                      user: String(item?.username ?? ""),
+                      password: String(item?.password ?? ""),
+                      source: "tsupasswd_core",
+                      vault: true,
+                      url: String(item?.url ?? ""),
+                      updatedAt: String(item?.updatedAt ?? ""),
+                      createdAt: String(item?.createdAt ?? "")
+                    };
+                  })
+                  .filter((p) => !host || strictHostRelated(p?.rpId, host));
 
             finish({
               ok: true,
               requestId,
               passkeys: mapped,
-              sources: { vault: { ok: true, count: mapped.length, rawCount, host } }
+              sources: { vault: { ok: true, count: mapped.length, rawCount, host, rawSample } }
             });
           }
         );
@@ -1712,8 +1806,29 @@
   }
 
   function isRpIdRelatedToHost(passkeyRpId, host) {
-    const rp = String(passkeyRpId || "").trim().toLowerCase();
-    const h = String(host || "").trim().toLowerCase();
+    const normalizeToHost = (value) => {
+      const raw = String(value || "").trim().toLowerCase();
+      if (!raw) return "";
+      try {
+        const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw);
+        const normalized = raw.startsWith("//")
+          ? `https:${raw}`
+          : hasScheme
+            ? raw
+            : raw.includes(".") && !raw.startsWith("/")
+              ? `https://${raw.replace(/^\/+/, "")}`
+              : raw;
+        const parsed = new URL(normalized, window.location.href);
+        const host = String(parsed.hostname || "").trim().toLowerCase();
+        if (!host) return raw;
+        return host.startsWith("www.") ? host.slice(4) : host;
+      } catch {
+        return raw.startsWith("www.") ? raw.slice(4) : raw;
+      }
+    };
+
+    const rp = normalizeToHost(passkeyRpId);
+    const h = normalizeToHost(host);
     if (!rp || !h) return false;
 
     if (h === rp || h.endsWith(`.${rp}`) || rp.endsWith(`.${h}`)) return true;
@@ -2561,13 +2676,60 @@
       const vaultCount = Number(vaultMeta?.count ?? 0);
       const vaultRaw = Number(vaultMeta?.rawCount ?? 0);
       const vaultHost = String(vaultMeta?.host ?? "").trim();
+      const vaultHosts = Array.isArray(vaultMeta?.hosts) ? vaultMeta.hosts : [];
+      const vaultAttempts = Array.isArray(vaultMeta?.attempts) ? vaultMeta.attempts : [];
       const windowsCount = Number(windowsMeta?.count ?? 0);
       const coreError = coreMeta?.error ? ` (err:${coreMeta.error})` : "";
       const vaultError = vaultMeta?.error ? ` (err:${vaultMeta.error})` : "";
       const windowsError = windowsMeta?.error ? ` (err:${windowsMeta.error})` : "";
-      const vaultExtra = vaultHost || vaultRaw ? ` (raw=${vaultRaw}, host=${vaultHost || "(none)"})` : "";
+      const vaultExtra =
+        vaultHost || vaultRaw
+          ? ` (raw=${vaultRaw}, host=${vaultHost || "(none)"})`
+          : vaultHosts.length
+            ? ` (hosts=${vaultHosts.slice(0, 5).join(",")}${vaultHosts.length > 5 ? ",..." : ""})`
+            : "";
       meta.textContent = `core=${coreCount}${coreError} / vault=${vaultCount}${vaultError}${vaultExtra} / windows_hello=${windowsCount}${windowsError}`;
       listEl.appendChild(meta);
+
+      if (vaultAttempts.length) {
+        const detail = document.createElement("div");
+        detail.className = "empty";
+        detail.textContent = vaultAttempts
+          .slice(0, 5)
+          .map((a) => {
+            const h = String(a?.host ?? "");
+            if (!a?.ok) return `${h}:err`;
+            const raw = Number(a?.raw ?? 0);
+            const cnt = Number(a?.count ?? 0);
+            const sample = a?.sample && typeof a.sample === "object" ? a.sample : null;
+            const sampleText =
+              raw > 0 && cnt === 0 && sample
+                ? ` rpId=${String(sample?.rpId ?? "") || "(none)"} url=${String(sample?.url ?? "") || "(none)"}`
+                : "";
+            return `${h}:raw=${raw},count=${cnt}${sampleText}`;
+          })
+          .join(" / ");
+        listEl.appendChild(detail);
+      }
+
+      const vaultList = Array.isArray(result?.passkeys)
+        ? result.passkeys.filter((p) => normalizeSource(p?.source) === "tsupasswd_core")
+        : [];
+      if (vaultList.length) {
+        const sample = document.createElement("div");
+        sample.className = "empty";
+        sample.textContent = vaultList
+          .slice(0, 3)
+          .map((p) => {
+            const rp = String(p?.rpId ?? "").trim();
+            const url = String(p?.url ?? "").trim();
+            const title = String(p?.title ?? "").trim();
+            const user = String(p?.user ?? "").trim();
+            return `rpId=${rp || "(none)"} url=${url || "(none)"} title=${title || "(none)"} user=${user || "(none)"}`;
+          })
+          .join(" / ");
+        listEl.appendChild(sample);
+      }
     }
 
     if (lastAuthInfoMessage) {
@@ -3033,15 +3195,25 @@
         } else {
         const candidates = deriveRelatedHostsFromPage();
         const seen = new Map();
+        const attempts = [];
         let anyOk = false;
         let lastError = null;
         for (const hostCandidate of candidates) {
           const forced = await requestVaultLoginList(hostCandidate);
           if (!forced?.ok) {
             lastError = forced;
+            attempts.push({ host: hostCandidate, ok: false, error: forced?.error, detail: forced?.detail });
             continue;
           }
           anyOk = true;
+          const sample = Array.isArray(forced?.sources?.vault?.rawSample) ? forced.sources.vault.rawSample[0] : null;
+          attempts.push({
+            host: hostCandidate,
+            ok: true,
+            raw: Number(forced?.sources?.vault?.rawCount ?? 0),
+            count: Number(forced?.sources?.vault?.count ?? (Array.isArray(forced?.passkeys) ? forced.passkeys.length : 0)),
+            sample
+          });
           const list = Array.isArray(forced.passkeys) ? forced.passkeys : [];
           for (const p of list) {
             const id = String(p?.id || "");
@@ -3056,12 +3228,83 @@
           result = {
             ok: true,
             passkeys: Array.from(seen.values()),
-            sources: { vault: { ok: true, count: seen.size } }
+            sources: { vault: { ok: true, count: seen.size, hosts: candidates, attempts } }
           };
         }
         }
       } else {
         result = await requestNativeListWithFallback(rpId);
+
+        if (!showAllPasskeys && !isWebauthnHookTargetHost()) {
+          const candidates = deriveRelatedHostsFromPage();
+          const merged = new Map();
+          const baseList = Array.isArray(result?.passkeys) ? result.passkeys : [];
+          for (const p of baseList) {
+            const key = `${normalizeSource(p?.source)}:${String(p?.id ?? "")}`;
+            if (!merged.has(key)) merged.set(key, p);
+          }
+
+          const attempts = [];
+
+          let anyOk = false;
+          let lastError = null;
+          for (const hostCandidate of candidates) {
+            const forced = await requestVaultLoginList(hostCandidate);
+            if (!forced?.ok) {
+              lastError = forced;
+              attempts.push({ host: hostCandidate, ok: false, error: forced?.error, detail: forced?.detail });
+              continue;
+            }
+            anyOk = true;
+            const sample = Array.isArray(forced?.sources?.vault?.rawSample) ? forced.sources.vault.rawSample[0] : null;
+            attempts.push({
+              host: hostCandidate,
+              ok: true,
+              raw: Number(forced?.sources?.vault?.rawCount ?? 0),
+              count: Number(forced?.sources?.vault?.count ?? (Array.isArray(forced?.passkeys) ? forced.passkeys.length : 0)),
+              sample
+            });
+            const list = Array.isArray(forced.passkeys) ? forced.passkeys : [];
+            for (const p of list) {
+              const key = `${normalizeSource(p?.source)}:${String(p?.id ?? "")}`;
+              if (!merged.has(key)) merged.set(key, p);
+            }
+          }
+
+          const vaultCount = Array.from(merged.values()).filter((p) => normalizeSource(p?.source) === "tsupasswd_core").length;
+          if (anyOk) {
+            result = {
+              ok: true,
+              passkeys: Array.from(merged.values()),
+              sources: {
+                ...(result?.sources || {}),
+                vault: {
+                  ok: true,
+                  count: vaultCount,
+                  hosts: candidates,
+                  attempts
+                }
+              }
+            };
+          } else if (!result?.ok && lastError?.ok) {
+            result = lastError;
+          } else if (lastError && (!result || typeof result !== "object" || !result.sources)) {
+            result = {
+              ...(result && typeof result === "object" ? result : { ok: false }),
+              sources: {
+                ...(result?.sources || {}),
+                vault: {
+                  ok: false,
+                  count: 0,
+                  hosts: candidates,
+                  attempts,
+                  error: lastError?.error,
+                  detail: lastError?.detail
+                }
+              }
+            };
+          }
+        }
       }
     } catch (e) {
       result = { ok: false, error: "list_fetch_failed", detail: String(e?.message || e) };

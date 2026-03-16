@@ -93,6 +93,9 @@
     <button id="vaultList">List Vault Logins</button>
     <button id="vaultResync">Resync</button>
   </div>
+  <div>
+    <label><input id="vaultIncludeDeleted" type="checkbox" /> includeDeleted</label>
+  </div>
   <div class="table-wrap">
     <table>
       <thead>
@@ -125,10 +128,15 @@
     <button id="vaultSave">Save Vault Login</button>
     <button id="vaultUpdate">Update Vault Login</button>
     <button id="vaultDelete">Delete Vault Login</button>
+    <button id="vaultUndelete">Undelete Vault Login</button>
   </div>
 
   <label for="payload">Payload JSON</label>
   <textarea id="payload">{"type":"ping","requestId":"demo-1"}</textarea>
+  <div>
+    <button id="sendPayload">Send Payload</button>
+    <button id="vaultPush">Push</button>
+  </div>
 
   <h4>Result</h4>
   <pre id="result">(no message yet)</pre>

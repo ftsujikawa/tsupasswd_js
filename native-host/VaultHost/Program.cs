@@ -187,6 +187,37 @@ internal sealed class NativeMessagingVaultHost
             return new { ok = true, id, command, result = new { itemId = existing.itemId } };
         }
 
+        if (string.Equals(command, "vault.login.undelete", StringComparison.OrdinalIgnoreCase))
+        {
+            var itemId = GetOptionalString(payload, "itemId") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                return new { ok = false, id, command, error = "invalid_argument", detail = "itemId is required." };
+            }
+
+            var store = LoadStore();
+            var index = Array.FindIndex(store.items, i => string.Equals(i.itemId, itemId, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+            {
+                return new { ok = false, id, command, error = "not_found", detail = "itemId was not found." };
+            }
+
+            var existing = store.items[index];
+            existing.deleted = false;
+            existing.updatedAt = DateTimeOffset.UtcNow;
+            store.items[index] = existing;
+            SaveStore(store);
+
+            var resync = GetOptionalBool(payload, "resync") ?? false;
+            if (resync)
+            {
+                var syncResult = await PushStoreAsync(payload, cancellationToken);
+                return new { ok = true, id, command, result = new { itemId = existing.itemId, sync = syncResult } };
+            }
+
+            return new { ok = true, id, command, result = new { itemId = existing.itemId } };
+        }
+
         return new { ok = false, id, command, error = "not_implemented", detail = "Unsupported command." };
     }
 
@@ -672,8 +703,26 @@ internal sealed class NativeMessagingVaultHost
             return env;
         }
 
+        var syncEnv = Environment.GetEnvironmentVariable("TSUPASSWD_SYNC_STORE_PATH");
+        if (!string.IsNullOrWhiteSpace(syncEnv))
+        {
+            return syncEnv;
+        }
+
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(localAppData, DefaultAppDirName, DefaultStoreFileName);
+        var defaultPath = Path.Combine(localAppData, DefaultAppDirName, DefaultStoreFileName);
+        if (File.Exists(defaultPath))
+        {
+            return defaultPath;
+        }
+
+        var appPath = Path.Combine(localAppData, "PasskeyManager", DefaultStoreFileName);
+        if (File.Exists(appPath))
+        {
+            return appPath;
+        }
+
+        return defaultPath;
     }
 
     private async Task<JsonElement?> ReadMessageAsync(CancellationToken cancellationToken)

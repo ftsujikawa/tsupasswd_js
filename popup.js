@@ -27,6 +27,10 @@ const vaultNotesEl = document.getElementById("vaultNotes");
 const vaultSaveBtn = document.getElementById("vaultSave");
 const vaultUpdateBtn = document.getElementById("vaultUpdate");
 const vaultDeleteBtn = document.getElementById("vaultDelete");
+const vaultUndeleteBtn = document.getElementById("vaultUndelete");
+const vaultIncludeDeletedEl = document.getElementById("vaultIncludeDeleted");
+const sendPayloadBtn = document.getElementById("sendPayload");
+const vaultPushBtn = document.getElementById("vaultPush");
 
 let lastPasskeys = [];
 let lastVaultItems = [];
@@ -59,6 +63,23 @@ function setResult(value) {
     return;
   }
   resultEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function tryParseJson(text) {
+  try {
+    return JSON.parse(String(text ?? ""));
+  } catch {
+    return null;
+  }
+}
+
+function extractSyncConfigFromPayloadJson() {
+  const edited = tryParseJson(payloadEl?.value ?? "");
+  const src = edited && typeof edited === "object" ? edited : {};
+  const p = src?.payload && typeof src.payload === "object" ? src.payload : {};
+  const email = String(p?.email ?? src?.email ?? "").trim();
+  const baseUrl = String(p?.baseUrl ?? src?.baseUrl ?? "").trim();
+  return { email, baseUrl };
 }
 
 function escapeText(v) {
@@ -293,8 +314,9 @@ async function refreshList() {
 
 async function refreshVaultList(options = {}) {
   const suppressResult = options?.suppressResult === true;
+  const includeDeleted = Boolean(vaultIncludeDeletedEl?.checked);
   const payload = buildVaultPayload("vault.login.list", {
-    includeDeleted: false,
+    includeDeleted,
     requestId: `vault-list-${Date.now()}`
   });
   payloadEl.value = JSON.stringify(payload, null, 2);
@@ -372,6 +394,51 @@ try {
     });
   }
 
+  if (sendPayloadBtn) {
+    sendPayloadBtn.addEventListener("click", async () => {
+      const parsed = tryParseJson(payloadEl?.value ?? "");
+      if (!parsed || typeof parsed !== "object") {
+        setResult({ ok: false, error: "Invalid JSON" });
+        return;
+      }
+      const target = parsed?.command?.startsWith("vault.") ? "vault" : "passkey";
+      setResult({ ok: true, state: "running", target, command: parsed?.command ?? parsed?.type ?? "" });
+      try {
+        const res = await sendNativeAwait(parsed, target);
+        setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
+        if (target === "vault" && (parsed?.command === "vault.sync.push" || parsed?.command === "vault.sync.resync")) {
+          await refreshVaultList({ suppressResult: true });
+        }
+      } catch (e) {
+        setResult({ ok: false, error: String(e?.message ?? e) });
+      }
+    });
+  }
+
+  if (vaultPushBtn) {
+    vaultPushBtn.addEventListener("click", async () => {
+      const { email, baseUrl } = extractSyncConfigFromPayloadJson();
+      const payload = buildVaultPayload("vault.sync.push", {
+        ...(email ? { email } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+        requestId: `vault-push-${Date.now()}`
+      });
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      setResult({ ok: true, state: "running", command: payload.command, id: payload.id });
+      try {
+        const res = await sendNativeAwait(payload, "vault");
+        setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
+        if (res?.ok) {
+          await refreshVaultList({ suppressResult: true });
+        }
+      } catch (e) {
+        setResult({ ok: false, error: String(e?.message ?? e) });
+      }
+    });
+  }
+
   if (listBtn) {
     listBtn.addEventListener("click", async () => {
       await refreshList();
@@ -438,7 +505,12 @@ try {
 
   if (vaultListBtn) {
     vaultListBtn.addEventListener("click", async () => {
-      await refreshVaultList();
+      setResult({ ok: true, state: "running", command: "vault.login.list" });
+      try {
+        await refreshVaultList();
+      } catch (e) {
+        setResult({ ok: false, command: "vault.login.list", error: String(e?.message ?? e) });
+      }
     });
   }
 
@@ -658,6 +730,29 @@ try {
         itemId,
         resync: true,
         requestId: `vault-delete-${Date.now()}`
+      });
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      const res = await sendNativeAwait(payload, "vault");
+      setResult(res?.raw ?? res);
+      if (res?.ok) {
+        await refreshVaultList();
+      }
+    });
+  }
+
+  if (vaultUndeleteBtn) {
+    vaultUndeleteBtn.addEventListener("click", async () => {
+      const itemId = (vaultItemIdEl?.value ?? "").trim();
+      if (!itemId) {
+        setResult({ ok: false, error: "itemId is required." });
+        return;
+      }
+      const payload = buildVaultPayload("vault.login.undelete", {
+        itemId,
+        resync: true,
+        requestId: `vault-undelete-${Date.now()}`
       });
       if (payloadEl) {
         payloadEl.value = JSON.stringify(payload, null, 2);

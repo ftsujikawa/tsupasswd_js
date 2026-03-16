@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("tsupasswd-vault-host")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c4a4bbc3d79c26163e81533929f3260c3ce8a169")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1e0b8960aeee6891df3617d20a240615c4fe99e8")]
 [assembly: System.Reflection.AssemblyProductAttribute("tsupasswd-vault-host")]
 [assembly: System.Reflection.AssemblyTitleAttribute("tsupasswd-vault-host")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

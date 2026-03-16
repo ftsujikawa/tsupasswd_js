@@ -82,6 +82,23 @@ function extractSyncConfigFromPayloadJson() {
   return { email, baseUrl };
 }
 
+async function persistSyncConfigToBackground({ email, baseUrl, enabled = true, periodMinutes = 1 } = {}) {
+  const e = String(email ?? "").trim();
+  const b = String(baseUrl ?? "").trim();
+  if (!e || !b) return;
+  try {
+    await chrome.runtime.sendMessage({
+      type: "sync-config-set",
+      payload: {
+        email: e,
+        baseUrl: b,
+        enabled: Boolean(enabled),
+        periodMinutes: Number(periodMinutes)
+      }
+    });
+  } catch {}
+}
+
 function escapeText(v) {
   return String(v ?? "");
 }
@@ -436,8 +453,12 @@ try {
         return;
       }
       const target = parsed?.command?.startsWith("vault.") ? "vault" : "passkey";
-      setResult({ ok: true, state: "running", target, command: parsed?.command ?? parsed?.type ?? "" });
+      setResult({ ok: true, state: "running", command: parsed?.command ?? parsed?.type ?? "" });
       try {
+        if (target === "vault" && (parsed?.command === "vault.sync.push" || parsed?.command === "vault.sync.resync")) {
+          const p = parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : {};
+          await persistSyncConfigToBackground({ email: p?.email, baseUrl: p?.baseUrl });
+        }
         const res = await sendNativeAwait(parsed, target);
         setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
         if (target === "vault" && (parsed?.command === "vault.sync.push" || parsed?.command === "vault.sync.resync")) {
@@ -452,134 +473,13 @@ try {
   if (vaultPushBtn) {
     vaultPushBtn.addEventListener("click", async () => {
       const { email, baseUrl } = extractSyncConfigFromPayloadJson();
+      await persistSyncConfigToBackground({ email, baseUrl });
       const payload = buildVaultPayload("vault.sync.push", {
         ...(email ? { email } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         requestId: `vault-push-${Date.now()}`
       });
       if (payloadEl) {
-        payloadEl.value = JSON.stringify(payload, null, 2);
-      }
-      setResult({ ok: true, state: "running", command: payload.command, id: payload.id });
-      try {
-        const res = await sendNativeAwait(payload, "vault");
-        setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
-        if (res?.ok) {
-          await refreshVaultList({ suppressResult: true });
-        }
-      } catch (e) {
-        setResult({ ok: false, error: String(e?.message ?? e) });
-      }
-    });
-  }
-
-  if (listBtn) {
-    listBtn.addEventListener("click", async () => {
-      await refreshList();
-    });
-  }
-
-  if (clearBtn) {
-    clearBtn.addEventListener("click", async () => {
-      const requestId = `clear-${Date.now()}`;
-      const payload = { type: "clear_passkeys", requestId };
-      if (payloadEl) {
-        payloadEl.value = JSON.stringify(payload);
-      }
-      setResult(await sendNative(payload, "passkey"));
-    });
-  }
-
-  if (addBtn) {
-    addBtn.addEventListener("click", async () => {
-      const requestId = `add-${Date.now()}`;
-      const payload = {
-        type: "add_passkey",
-        requestId,
-        passkey: {
-          id: (pkIdEl?.value ?? "").trim() || undefined,
-          title: (pkTitleEl?.value ?? "").trim() || undefined,
-          rpId: (pkRpIdEl?.value ?? "").trim() || undefined,
-          user: (pkUserEl?.value ?? "").trim() || undefined
-        }
-      };
-      if (payloadEl) {
-        payloadEl.value = JSON.stringify(payload);
-      }
-      setResult(await sendNative(payload, "passkey"));
-    });
-  }
-
-  if (removeBtn) {
-    removeBtn.addEventListener("click", async () => {
-      const id = (pkIdEl?.value ?? "").trim();
-      if (!id) {
-        setResult({ ok: false, error: "id is required." });
-        return;
-      }
-      const requestId = `remove-${Date.now()}`;
-      const payload = { type: "remove_passkey", requestId, id };
-      if (payloadEl) {
-        payloadEl.value = JSON.stringify(payload);
-      }
-      setResult(await sendNative(payload, "passkey"));
-    });
-  }
-
-  if (vaultStatusBtn) {
-    vaultStatusBtn.addEventListener("click", async () => {
-      const payload = buildVaultPayload("vault.status.get", { requestId: `vault-status-${Date.now()}` });
-      if (payloadEl) {
-        payloadEl.value = JSON.stringify(payload, null, 2);
-      }
-      const res = await sendNativeAwait(payload, "vault");
-      setResult(res?.raw ?? res);
-    });
-  }
-
-  if (vaultListBtn) {
-    vaultListBtn.addEventListener("click", async () => {
-      setResult({ ok: true, state: "running", command: "vault.login.list" });
-      try {
-        await refreshVaultList();
-      } catch (e) {
-        setResult({ ok: false, command: "vault.login.list", error: String(e?.message ?? e) });
-      }
-    });
-  }
-
-  if (vaultResyncBtn) {
-    vaultResyncBtn.addEventListener("click", async () => {
-      let payload = buildVaultPayload("vault.sync.resync", { requestId: `vault-resync-${Date.now()}` });
-      if (payloadEl) {
-        const text = (payloadEl.value ?? "").trim();
-        if (text) {
-          try {
-            const edited = JSON.parse(text);
-            if (edited && typeof edited === "object") {
-              if (edited.command === "vault.sync.resync") {
-                payload = {
-                  ...payload,
-                  ...edited,
-                  payload: {
-                    ...(payload.payload ?? {}),
-                    ...(edited.payload ?? {})
-                  }
-                };
-              } else {
-                payload = {
-                  ...payload,
-                  payload: {
-                    ...(payload.payload ?? {}),
-                    ...(edited.payload ?? {}),
-                    ...edited
-                  }
-                };
-              }
-            }
-          } catch {
-          }
-        }
         payloadEl.value = JSON.stringify(payload, null, 2);
       }
       setResult({ ok: true, state: "running", command: payload.command, id: payload.id });

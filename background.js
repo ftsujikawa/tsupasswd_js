@@ -5,6 +5,63 @@ const ports = new Map();
 
 const NATIVE_DEBUG_DEFAULT = false;
 
+const AUTO_SYNC_ALARM_NAME = "tsupasswd-auto-resync";
+const AUTO_SYNC_STORAGE_KEY = "tsupasswdSyncConfig";
+const AUTO_SYNC_DEFAULT_PERIOD_MINUTES = 1;
+
+async function getStoredSyncConfig() {
+  try {
+    const res = await chrome.storage.local.get(AUTO_SYNC_STORAGE_KEY);
+    const cfg = res?.[AUTO_SYNC_STORAGE_KEY];
+    if (!cfg || typeof cfg !== "object") return null;
+    const email = String(cfg?.email ?? "").trim();
+    const baseUrl = String(cfg?.baseUrl ?? "").trim();
+    const enabled = cfg?.enabled === undefined ? true : Boolean(cfg?.enabled);
+    const periodMinutesRaw = Number(cfg?.periodMinutes ?? AUTO_SYNC_DEFAULT_PERIOD_MINUTES);
+    const periodMinutes = Number.isFinite(periodMinutesRaw) ? Math.max(1, Math.floor(periodMinutesRaw)) : AUTO_SYNC_DEFAULT_PERIOD_MINUTES;
+    if (!email || !baseUrl) return { email, baseUrl, enabled, periodMinutes };
+    return { email, baseUrl, enabled, periodMinutes };
+  } catch {
+    return null;
+  }
+}
+
+async function ensureAutoResyncAlarm() {
+  const cfg = await getStoredSyncConfig();
+  if (!cfg || !cfg.enabled) {
+    try {
+      await chrome.alarms.clear(AUTO_SYNC_ALARM_NAME);
+    } catch {}
+    return;
+  }
+  try {
+    chrome.alarms.create(AUTO_SYNC_ALARM_NAME, {
+      periodInMinutes: cfg.periodMinutes ?? AUTO_SYNC_DEFAULT_PERIOD_MINUTES
+    });
+  } catch {}
+}
+
+async function runAutoResync(reason = "alarm") {
+  const cfg = await getStoredSyncConfig();
+  if (!cfg || !cfg.enabled) return;
+  const email = String(cfg.email ?? "").trim();
+  const baseUrl = String(cfg.baseUrl ?? "").trim();
+  if (!email || !baseUrl) return;
+  try {
+    const payload = buildVaultRequest("vault.sync.resync", {
+      email,
+      baseUrl,
+      requestId: `auto-resync-${Date.now()}`,
+      reason
+    });
+    const p = ensurePort("vault");
+    debugNativeLog("auto-resync:postMessage", { reason, email, baseUrl, payload });
+    p.postMessage(payload);
+  } catch (e) {
+    debugNativeLog("auto-resync:error", { error: String(e) });
+  }
+}
+
 function debugNativeLog(event, detail = {}) {
   const enabled =
     Boolean(globalThis?.__TSUPASSWD_NATIVE_DEBUG) ||
@@ -205,6 +262,47 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "sync-config-set") {
+    (async () => {
+      try {
+        const cfg = message?.payload && typeof message.payload === "object" ? message.payload : {};
+        const email = String(cfg?.email ?? "").trim();
+        const baseUrl = String(cfg?.baseUrl ?? "").trim();
+        const enabled = cfg?.enabled === undefined ? true : Boolean(cfg?.enabled);
+        const periodMinutesRaw = Number(cfg?.periodMinutes ?? AUTO_SYNC_DEFAULT_PERIOD_MINUTES);
+        const periodMinutes = Number.isFinite(periodMinutesRaw)
+          ? Math.max(1, Math.floor(periodMinutesRaw))
+          : AUTO_SYNC_DEFAULT_PERIOD_MINUTES;
+        await chrome.storage.local.set({
+          [AUTO_SYNC_STORAGE_KEY]: {
+            email,
+            baseUrl,
+            enabled,
+            periodMinutes,
+            updatedAt: new Date().toISOString()
+          }
+        });
+        await ensureAutoResyncAlarm();
+        sendResponse({ ok: true, email, baseUrl, enabled, periodMinutes });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message ?? e) });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === "sync-resync-now") {
+    (async () => {
+      try {
+        await runAutoResync("manual");
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message ?? e) });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === "vault-connect") {
     try {
       ensurePort("vault");
@@ -382,3 +480,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
+
+try {
+  chrome.runtime.onInstalled.addListener(() => {
+    ensureAutoResyncAlarm();
+  });
+  chrome.runtime.onStartup.addListener(() => {
+    ensureAutoResyncAlarm();
+  });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name === AUTO_SYNC_ALARM_NAME) {
+      runAutoResync("alarm");
+    }
+  });
+} catch {}
+
+ensureAutoResyncAlarm();

@@ -114,7 +114,12 @@ internal sealed class NativeMessagingVaultHost
             if (resync)
             {
                 var syncResult = await PushStoreAsync(payload, cancellationToken);
-                return new { ok = true, id, command, result = new { itemId = item.itemId, sync = syncResult } };
+                var syncOk = syncResult.HasValue
+                    && syncResult.Value.ValueKind == JsonValueKind.Object
+                    && syncResult.Value.TryGetProperty("ok", out var okEl)
+                    && (okEl.ValueKind == JsonValueKind.True || okEl.ValueKind == JsonValueKind.False)
+                    && okEl.GetBoolean();
+                return new { ok = true, id, command, result = new { itemId = item.itemId, syncOk, sync = syncResult } };
             }
 
             return new { ok = true, id, command, result = new { itemId = item.itemId } };
@@ -150,7 +155,12 @@ internal sealed class NativeMessagingVaultHost
             if (resync)
             {
                 var syncResult = await PushStoreAsync(payload, cancellationToken);
-                return new { ok = true, id, command, result = new { itemId = existing.itemId, sync = syncResult } };
+                var syncOk = syncResult.HasValue
+                    && syncResult.Value.ValueKind == JsonValueKind.Object
+                    && syncResult.Value.TryGetProperty("ok", out var okEl)
+                    && (okEl.ValueKind == JsonValueKind.True || okEl.ValueKind == JsonValueKind.False)
+                    && okEl.GetBoolean();
+                return new { ok = true, id, command, result = new { itemId = existing.itemId, syncOk, sync = syncResult } };
             }
 
             return new { ok = true, id, command, result = new { itemId = existing.itemId } };
@@ -181,7 +191,12 @@ internal sealed class NativeMessagingVaultHost
             if (resync)
             {
                 var syncResult = await PushStoreAsync(payload, cancellationToken);
-                return new { ok = true, id, command, result = new { itemId = existing.itemId, sync = syncResult } };
+                var syncOk = syncResult.HasValue
+                    && syncResult.Value.ValueKind == JsonValueKind.Object
+                    && syncResult.Value.TryGetProperty("ok", out var okEl)
+                    && (okEl.ValueKind == JsonValueKind.True || okEl.ValueKind == JsonValueKind.False)
+                    && okEl.GetBoolean();
+                return new { ok = true, id, command, result = new { itemId = existing.itemId, syncOk, sync = syncResult } };
             }
 
             return new { ok = true, id, command, result = new { itemId = existing.itemId } };

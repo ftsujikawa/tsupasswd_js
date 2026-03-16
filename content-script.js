@@ -1251,6 +1251,30 @@
     }
   }
 
+  function getHostsFromEmbeddedUrls(text) {
+    const out = [];
+    const pushHost = (h) => {
+      const host = String(h || "").trim().toLowerCase();
+      if (!host) return;
+      out.push(host);
+      if (host.startsWith("www.")) out.push(host.slice(4));
+    };
+    try {
+      const raw = String(text || "");
+      if (!raw) return out;
+
+      const candidates = [raw];
+      try {
+        candidates.push(decodeURIComponent(raw));
+      } catch {}
+      for (const c of candidates) {
+        const host = getHostFromUrl(c);
+        if (host) pushHost(host);
+      }
+    } catch {}
+    return out;
+  }
+
   function deriveRpIdFromPage() {
     const currentHost = (window.location.hostname || "").trim().toLowerCase();
 
@@ -1269,6 +1293,48 @@
     }
 
     return currentHost;
+  }
+
+  function deriveRelatedHostsFromPage() {
+    const set = new Set();
+    const addHost = (h) => {
+      const host = String(h || "").trim().toLowerCase();
+      if (!host) return;
+      set.add(host);
+      if (host.startsWith("www.")) set.add(host.slice(4));
+    };
+
+    addHost(deriveRpIdFromPage());
+
+    try {
+      const refHost = getHostFromUrl(document.referrer || "");
+      if (refHost) addHost(refHost);
+    } catch {}
+
+    try {
+      const u = new URL(window.location.href);
+      const keys = [
+        "redirect_uri",
+        "redirect",
+        "return",
+        "return_url",
+        "returnUrl",
+        "continue",
+        "next",
+        "callback",
+        "back",
+        "back_url",
+        "origin",
+        "from"
+      ];
+      for (const k of keys) {
+        const v = u.searchParams.get(k);
+        if (!v) continue;
+        for (const h of getHostsFromEmbeddedUrls(v)) addHost(h);
+      }
+    } catch {}
+
+    return Array.from(set);
   }
 
   function deriveRpIdFromUrl(rawUrl) {
@@ -1433,7 +1499,7 @@
     }
   }
 
-  function requestVaultLoginSave({ title, username, password, url, notes }) {
+  function requestVaultLoginSave({ title, username, password, url, notes } = {}) {
     return new Promise((resolve) => {
       if (!chrome?.runtime?.sendMessage) {
         resolve({ ok: false, error: "chrome_runtime_unavailable" });
@@ -1475,7 +1541,24 @@
           (res) => {
             clearTimeout(timeoutId);
             if (chrome.runtime.lastError) {
-              finish({ ok: false, error: String(chrome.runtime.lastError.message || "") });
+              const errText = String(chrome.runtime.lastError.message || "");
+              if (errText.toLowerCase().includes("extension context invalidated")) {
+                finish({
+                  ok: false,
+                  error: "extension_context_invalidated",
+                  detail: "拡張を再読み込みしたため、このタブを再読み込みしてください。"
+                });
+                if (!hasTriggeredInvalidatedReload) {
+                  hasTriggeredInvalidatedReload = true;
+                  setTimeout(() => {
+                    try {
+                      window.location.reload();
+                    } catch {}
+                  }, 50);
+                }
+                return;
+              }
+              finish({ ok: false, error: errText });
               return;
             }
             if (!res?.ok) {
@@ -1487,7 +1570,24 @@
         );
       } catch (e) {
         clearTimeout(timeoutId);
-        finish({ ok: false, error: "vault_send_failed", detail: String(e?.message || e) });
+        const detail = String(e?.message || e);
+        if (detail.toLowerCase().includes("extension context invalidated")) {
+          finish({
+            ok: false,
+            error: "extension_context_invalidated",
+            detail: "拡張を再読み込みしたため、このタブを再読み込みしてください。"
+          });
+          if (!hasTriggeredInvalidatedReload) {
+            hasTriggeredInvalidatedReload = true;
+            setTimeout(() => {
+              try {
+                window.location.reload();
+              } catch {}
+            }, 50);
+          }
+          return;
+        }
+        finish({ ok: false, error: "vault_send_failed", detail });
       }
     });
   }
@@ -1529,7 +1629,24 @@
           (res) => {
             clearTimeout(timeoutId);
             if (chrome.runtime.lastError) {
-              finish({ ok: false, error: String(chrome.runtime.lastError.message || "") });
+              const errText = String(chrome.runtime.lastError.message || "");
+              if (errText.toLowerCase().includes("extension context invalidated")) {
+                finish({
+                  ok: false,
+                  error: "extension_context_invalidated",
+                  detail: "拡張を再読み込みしたため、このタブを再読み込みしてください。"
+                });
+                if (!hasTriggeredInvalidatedReload) {
+                  hasTriggeredInvalidatedReload = true;
+                  setTimeout(() => {
+                    try {
+                      window.location.reload();
+                    } catch {}
+                  }, 50);
+                }
+                return;
+              }
+              finish({ ok: false, error: errText });
               return;
             }
             if (!res?.ok) {
@@ -1539,7 +1656,11 @@
 
             const native = res?.payload ?? res?.raw;
             const items = Array.isArray(native?.result?.items) ? native.result.items : [];
-            const host = String(rpId || "").trim().toLowerCase();
+            let host = String(rpId || "").trim().toLowerCase();
+            if (host.startsWith("www.")) {
+              host = host.slice(4);
+            }
+            const rawCount = items.length;
             const mapped = items
               .map((item) => {
                 const itemRpId = deriveRpIdFromUrl(item?.url);
@@ -1556,14 +1677,36 @@
                   createdAt: String(item?.createdAt ?? "")
                 };
               })
-              .filter((p) => !host || isRpIdRelatedToHost(p?.rpId, host));
+              .filter((p) => !host || !String(p?.rpId ?? "").trim() || isRpIdRelatedToHost(p?.rpId, host));
 
-            finish({ ok: true, requestId, passkeys: mapped, sources: { vault: { ok: true, count: mapped.length } } });
+            finish({
+              ok: true,
+              requestId,
+              passkeys: mapped,
+              sources: { vault: { ok: true, count: mapped.length, rawCount, host } }
+            });
           }
         );
       } catch (e) {
         clearTimeout(timeoutId);
-        finish({ ok: false, error: "vault_send_failed", detail: String(e?.message || e) });
+        const detail = String(e?.message || e);
+        if (detail.toLowerCase().includes("extension context invalidated")) {
+          finish({
+            ok: false,
+            error: "extension_context_invalidated",
+            detail: "拡張を再読み込みしたため、このタブを再読み込みしてください。"
+          });
+          if (!hasTriggeredInvalidatedReload) {
+            hasTriggeredInvalidatedReload = true;
+            setTimeout(() => {
+              try {
+                window.location.reload();
+              } catch {}
+            }, 50);
+          }
+          return;
+        }
+        finish({ ok: false, error: "vault_send_failed", detail });
       }
     });
   }
@@ -1572,7 +1715,24 @@
     const rp = String(passkeyRpId || "").trim().toLowerCase();
     const h = String(host || "").trim().toLowerCase();
     if (!rp || !h) return false;
-    return h === rp || h.endsWith(`.${rp}`) || rp.endsWith(`.${h}`);
+
+    if (h === rp || h.endsWith(`.${rp}`) || rp.endsWith(`.${h}`)) return true;
+
+    const baseDomain = (value) => {
+      const parts = String(value || "")
+        .trim()
+        .toLowerCase()
+        .split(".")
+        .filter(Boolean);
+      if (parts.length < 2) return "";
+      return parts.slice(-2).join(".");
+    };
+
+    const hBase = baseDomain(h);
+    const rpBase = baseDomain(rp);
+    if (hBase && rpBase && hBase === rpBase) return true;
+
+    return false;
   }
 
   function getCredentialIdSuffix(id) {
@@ -2392,15 +2552,21 @@
     const shouldShowCredentialPair = (emailLikeInput || passwordLikeInput) && !isWebauthnHookTargetHost();
 
     const coreMeta = result?.sources?.core;
+    const vaultMeta = result?.sources?.vault;
     const windowsMeta = result?.sources?.windows_hello;
-    if (coreMeta || windowsMeta) {
+    if (coreMeta || vaultMeta || windowsMeta) {
       const meta = document.createElement("div");
       meta.className = "empty";
       const coreCount = Number(coreMeta?.count ?? 0);
+      const vaultCount = Number(vaultMeta?.count ?? 0);
+      const vaultRaw = Number(vaultMeta?.rawCount ?? 0);
+      const vaultHost = String(vaultMeta?.host ?? "").trim();
       const windowsCount = Number(windowsMeta?.count ?? 0);
       const coreError = coreMeta?.error ? ` (err:${coreMeta.error})` : "";
+      const vaultError = vaultMeta?.error ? ` (err:${vaultMeta.error})` : "";
       const windowsError = windowsMeta?.error ? ` (err:${windowsMeta.error})` : "";
-      meta.textContent = `core=${coreCount}${coreError} / windows_hello=${windowsCount}${windowsError}`;
+      const vaultExtra = vaultHost || vaultRaw ? ` (raw=${vaultRaw}, host=${vaultHost || "(none)"})` : "";
+      meta.textContent = `core=${coreCount}${coreError} / vault=${vaultCount}${vaultError}${vaultExtra} / windows_hello=${windowsCount}${windowsError}`;
       listEl.appendChild(meta);
     }
 
@@ -2862,14 +3028,37 @@
       const shouldForceUrlFilter =
         (isEmailLikeInput(menuAnchor) || isPasswordLikeInput(menuAnchor)) && !isWebauthnHookTargetHost();
       if (shouldForceUrlFilter) {
-        let forced = await requestVaultLoginList(rpId);
-        if (forced?.ok && Array.isArray(forced.passkeys) && forced.passkeys.length > 0) {
-          result = forced;
-        } else if (rpId && rpId.startsWith("www.")) {
-          forced = await requestVaultLoginList(rpId.slice(4));
-          result = forced;
+        if (showAllPasskeys) {
+          result = await requestVaultLoginList("");
         } else {
-          result = forced;
+        const candidates = deriveRelatedHostsFromPage();
+        const seen = new Map();
+        let anyOk = false;
+        let lastError = null;
+        for (const hostCandidate of candidates) {
+          const forced = await requestVaultLoginList(hostCandidate);
+          if (!forced?.ok) {
+            lastError = forced;
+            continue;
+          }
+          anyOk = true;
+          const list = Array.isArray(forced.passkeys) ? forced.passkeys : [];
+          for (const p of list) {
+            const id = String(p?.id || "");
+            if (!id) continue;
+            if (!seen.has(id)) seen.set(id, p);
+          }
+        }
+
+        if (!anyOk) {
+          result = lastError || { ok: false, error: "vault-request-failed" };
+        } else {
+          result = {
+            ok: true,
+            passkeys: Array.from(seen.values()),
+            sources: { vault: { ok: true, count: seen.size } }
+          };
+        }
         }
       } else {
         result = await requestNativeListWithFallback(rpId);

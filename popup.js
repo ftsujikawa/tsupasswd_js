@@ -30,6 +30,8 @@ const vaultDeleteBtn = document.getElementById("vaultDelete");
 
 let lastPasskeys = [];
 let lastVaultItems = [];
+let vaultPasswordCache = {};
+let lastVaultPasswordCacheError = "";
 
 globalThis.__TSUPASSWD_POPUP_JS_VERSION = "2026-03-14T21:50+09:00";
 try {
@@ -43,6 +45,10 @@ function selectVaultItem(item) {
   vaultUrlEl.value = escapeText(item?.url);
   vaultNotesEl.value = escapeText(item?.notes);
   vaultPasswordEl.value = "";
+  try {
+    const hasPassword = Boolean(String(getCachedVaultPassword(item) || item?.password || "").trim());
+    vaultPasswordEl.placeholder = hasPassword ? "(保存済み)" : "";
+  } catch {}
 }
 
 function setResult(value) {
@@ -57,6 +63,65 @@ function setResult(value) {
 
 function escapeText(v) {
   return String(v ?? "");
+}
+
+function getCachedVaultPassword(item) {
+  const itemId = String(item?.itemId ?? "");
+  if (!itemId) return "";
+  return String(vaultPasswordCache?.[itemId] ?? "");
+}
+
+async function loadVaultPasswordCache() {
+  return await new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(["vaultPasswordCache"], (res) => {
+        if (chrome.runtime.lastError) {
+          lastVaultPasswordCacheError = String(chrome.runtime.lastError.message ?? chrome.runtime.lastError);
+          resolve({});
+          return;
+        }
+        lastVaultPasswordCacheError = "";
+        resolve(res?.vaultPasswordCache && typeof res.vaultPasswordCache === "object" ? res.vaultPasswordCache : {});
+      });
+    } catch {
+      lastVaultPasswordCacheError = "exception";
+      resolve({});
+    }
+  });
+}
+
+async function setCachedVaultPassword(itemId, password) {
+  const id = String(itemId ?? "").trim();
+  if (!id) return false;
+  const pwd = String(password ?? "");
+  if (!pwd) return false;
+  vaultPasswordCache = {
+    ...(vaultPasswordCache && typeof vaultPasswordCache === "object" ? vaultPasswordCache : {}),
+    [id]: pwd
+  };
+  try {
+    return await new Promise((resolve) => {
+      chrome.storage.local.set({ vaultPasswordCache }, () => {
+        if (chrome.runtime.lastError) {
+          lastVaultPasswordCacheError = String(chrome.runtime.lastError.message ?? chrome.runtime.lastError);
+          resolve(false);
+          return;
+        }
+        lastVaultPasswordCacheError = "";
+        chrome.storage.local.get(["vaultPasswordCache"], (res) => {
+          if (chrome.runtime.lastError) {
+            lastVaultPasswordCacheError = String(chrome.runtime.lastError.message ?? chrome.runtime.lastError);
+            resolve(false);
+            return;
+          }
+          const cache = res?.vaultPasswordCache && typeof res.vaultPasswordCache === "object" ? res.vaultPasswordCache : {};
+          const stored = String(cache?.[id] ?? "");
+          resolve(Boolean(stored) && stored === pwd);
+        });
+      });
+    });
+  } catch {}
+  return false;
 }
 
 function tryDeriveRpIdFromUrl(rawUrl) {
@@ -156,6 +221,31 @@ function renderVaultItems() {
     tdUrl.textContent = escapeText(item?.url);
     tr.appendChild(tdUrl);
 
+    const tdPassword = document.createElement("td");
+    const password = String(getCachedVaultPassword(item) || item?.password || "");
+    const masked = password ? "••••••" : "";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = password ? "Copy" : "";
+    copyBtn.disabled = !password;
+    copyBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!password) return;
+      try {
+        await navigator.clipboard.writeText(password);
+        setResult({ ok: true, action: "vault.password.copy", itemId: item?.itemId ?? "" });
+      } catch (err) {
+        setResult({ ok: false, action: "vault.password.copy", error: String(err?.message ?? err) });
+      }
+    });
+    tdPassword.textContent = masked;
+    if (password) {
+      tdPassword.appendChild(document.createTextNode(" "));
+      tdPassword.appendChild(copyBtn);
+    }
+    tr.appendChild(tdPassword);
+
     const tdId = document.createElement("td");
     tdId.textContent = escapeText(item?.itemId);
     tr.appendChild(tdId);
@@ -175,6 +265,11 @@ function buildVaultPayload(command, payload = {}) {
     command,
     payload
   };
+}
+
+async function readVaultStatus() {
+  const payload = buildVaultPayload("vault.status.get", { requestId: `vault-status-${Date.now()}` });
+  return await sendNativeAwait(payload, "vault");
 }
 
 async function refreshList() {
@@ -204,6 +299,7 @@ async function refreshVaultList(options = {}) {
   });
   payloadEl.value = JSON.stringify(payload, null, 2);
   const res = await sendNativeAwait(payload, "vault");
+  vaultPasswordCache = await loadVaultPasswordCache();
   if (res?.ok && res?.payload && Array.isArray(res.payload.result?.items)) {
     lastVaultItems = res.payload.result.items;
     renderVaultItems();
@@ -211,7 +307,7 @@ async function refreshVaultList(options = {}) {
       selectVaultItem(lastVaultItems[0]);
     }
     if (!suppressResult) {
-      setResult({ ok: true, native: res.payload });
+      setResult({ ok: true, native: res.payload, cacheKeysCount: Object.keys(vaultPasswordCache ?? {}).length, cacheError: lastVaultPasswordCacheError });
     }
     return;
   }
@@ -222,7 +318,7 @@ async function refreshVaultList(options = {}) {
       selectVaultItem(lastVaultItems[0]);
     }
     if (!suppressResult) {
-      setResult({ ok: true, native: res.raw });
+      setResult({ ok: true, native: res.raw, cacheKeysCount: Object.keys(vaultPasswordCache ?? {}).length, cacheError: lastVaultPasswordCacheError });
     }
     return;
   }
@@ -395,23 +491,78 @@ try {
 
   if (vaultSaveBtn) {
     vaultSaveBtn.addEventListener("click", async () => {
+      const password = (vaultPasswordEl?.value ?? "").trim();
+      if (!password) {
+        setResult({ ok: false, error: "password is required." });
+        return;
+      }
+      const inputTitle = (vaultTitleEl?.value ?? "").trim();
+      const inputUsername = (vaultUsernameEl?.value ?? "").trim();
+      const inputUrl = (vaultUrlEl?.value ?? "").trim();
       const payload = buildVaultPayload("vault.login.save", {
-        title: (vaultTitleEl?.value ?? "").trim(),
-        username: (vaultUsernameEl?.value ?? "").trim(),
-        password: (vaultPasswordEl?.value ?? "").trim(),
-        url: (vaultUrlEl?.value ?? "").trim(),
+        title: inputTitle,
+        username: inputUsername,
+        password,
+        url: inputUrl,
         notes: (vaultNotesEl?.value ?? "").trim(),
-        resync: true,
+        resync: false,
         requestId: `vault-save-${Date.now()}`
       });
       if (payloadEl) {
         payloadEl.value = JSON.stringify(payload, null, 2);
       }
       const res = await sendNativeAwait(payload, "vault");
-      setResult(res?.raw ?? res);
-      if (res?.ok && vaultPasswordEl) {
+      const status = await readVaultStatus();
+      const nativeOk = Boolean(res?.raw?.ok ?? res?.payload?.ok);
+      if (res?.ok && nativeOk && vaultPasswordEl) {
+        let savedId = "";
+        try {
+          savedId =
+            res?.raw?.result?.itemId ??
+            res?.payload?.result?.itemId ??
+            res?.raw?.itemId ??
+            res?.payload?.itemId ??
+            "";
+        } catch {}
+        if (!String(savedId).trim()) {
+          setResult({ ok: false, action: "vault.login.save", error: "missing_itemId", native: res?.raw ?? res });
+          return;
+        }
+        const cacheSaved = await setCachedVaultPassword(savedId, password);
+        if (!cacheSaved) {
+          setResult({ ok: false, action: "vault.password.cache", error: "Failed to persist cache", itemId: savedId });
+          return;
+        }
         vaultPasswordEl.value = "";
-        await refreshVaultList();
+        await refreshVaultList({ suppressResult: true });
+        const match = lastVaultItems.find((item) => {
+          const t = String(item?.title ?? "").trim();
+          const u = String(item?.username ?? "").trim();
+          const url = String(item?.url ?? "").trim();
+          return (inputTitle ? t === inputTitle : true) && (inputUsername ? u === inputUsername : true) && (inputUrl ? url === inputUrl : true);
+        });
+        const hasPassword = Boolean(String(getCachedVaultPassword(match) || match?.password || "").trim());
+        setResult({
+          ok: Boolean(res?.ok && nativeOk),
+          action: "vault.login.save",
+          savedId,
+          cacheSaved: true,
+          storedItemId: match?.itemId ?? "",
+          savedPassword: hasPassword,
+          cachedItemId: match?.itemId ?? "",
+          storePath: status?.payload?.result?.storePath ?? status?.raw?.result?.storePath ?? "",
+          status: status?.raw ?? status?.payload ?? status,
+          native: res?.raw ?? res
+        });
+      } else {
+        setResult({
+          ok: Boolean(res?.ok && nativeOk),
+          action: "vault.login.save",
+          error: !nativeOk ? "native_error" : undefined,
+          storePath: status?.payload?.result?.storePath ?? status?.raw?.result?.storePath ?? "",
+          status: status?.raw ?? status?.payload ?? status,
+          native: res?.raw ?? res
+        });
       }
     });
   }
@@ -423,24 +574,75 @@ try {
         setResult({ ok: false, error: "itemId is required." });
         return;
       }
+      const password = (vaultPasswordEl?.value ?? "").trim();
+      if (!password) {
+        setResult({ ok: false, error: "password is required." });
+        return;
+      }
+      const inputTitle = (vaultTitleEl?.value ?? "").trim();
+      const inputUsername = (vaultUsernameEl?.value ?? "").trim();
+      const inputUrl = (vaultUrlEl?.value ?? "").trim();
       const payload = buildVaultPayload("vault.login.update", {
         itemId,
-        title: (vaultTitleEl?.value ?? "").trim(),
-        username: (vaultUsernameEl?.value ?? "").trim(),
-        password: (vaultPasswordEl?.value ?? "").trim(),
-        url: (vaultUrlEl?.value ?? "").trim(),
+        title: inputTitle,
+        username: inputUsername,
+        password,
+        url: inputUrl,
         notes: (vaultNotesEl?.value ?? "").trim(),
-        resync: true,
+        resync: false,
         requestId: `vault-update-${Date.now()}`
       });
       if (payloadEl) {
         payloadEl.value = JSON.stringify(payload, null, 2);
       }
       const res = await sendNativeAwait(payload, "vault");
-      setResult(res?.raw ?? res);
-      if (res?.ok && vaultPasswordEl) {
+      const status = await readVaultStatus();
+      const nativeOk = Boolean(res?.raw?.ok ?? res?.payload?.ok);
+      if (res?.ok && nativeOk && vaultPasswordEl) {
+        let savedId = itemId;
+        try {
+          savedId =
+            res?.raw?.result?.itemId ??
+            res?.payload?.result?.itemId ??
+            res?.raw?.itemId ??
+            res?.payload?.itemId ??
+            itemId;
+        } catch {}
+        if (!String(savedId).trim()) {
+          setResult({ ok: false, action: "vault.login.update", error: "missing_itemId", native: res?.raw ?? res });
+          return;
+        }
+        const cacheSaved = await setCachedVaultPassword(savedId, password);
+        if (!cacheSaved) {
+          setResult({ ok: false, action: "vault.password.cache", error: "Failed to persist cache", itemId: savedId });
+          return;
+        }
         vaultPasswordEl.value = "";
-        await refreshVaultList();
+        await refreshVaultList({ suppressResult: true });
+        const match = lastVaultItems.find((item) => String(item?.itemId ?? "") === itemId);
+        const hasPassword = Boolean(String(getCachedVaultPassword(match) || match?.password || "").trim());
+        setResult({
+          ok: Boolean(res?.ok && nativeOk),
+          action: "vault.login.update",
+          savedId,
+          cacheSaved: true,
+          itemId,
+          savedPassword: hasPassword,
+          cachedItemId: itemId,
+          storePath: status?.payload?.result?.storePath ?? status?.raw?.result?.storePath ?? "",
+          status: status?.raw ?? status?.payload ?? status,
+          native: res?.raw ?? res
+        });
+      } else {
+        setResult({
+          ok: Boolean(res?.ok && nativeOk),
+          action: "vault.login.update",
+          itemId,
+          error: !nativeOk ? "native_error" : undefined,
+          storePath: status?.payload?.result?.storePath ?? status?.raw?.result?.storePath ?? "",
+          status: status?.raw ?? status?.payload ?? status,
+          native: res?.raw ?? res
+        });
       }
     });
   }

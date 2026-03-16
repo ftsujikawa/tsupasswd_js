@@ -27,6 +27,328 @@
     return isMenuPinned || isAuthInProgress || Boolean(lastAuthErrorMessage);
   }
 
+  function appendJetBrainsCopyControls(passwordText) {
+    if (!listEl) return false;
+    const host = (window.location.hostname || "").trim().toLowerCase();
+    const isJetBrains = host === "account.jetbrains.com" || host.endsWith(".jetbrains.com");
+    if (!isJetBrains) return false;
+    const pwd = String(passwordText ?? "");
+    if (!pwd) return false;
+
+    const wrap = document.createElement("div");
+    wrap.className = "empty";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "パスワードをコピー";
+    btn.style.width = "100%";
+    btn.style.padding = "8px";
+    btn.style.border = "1px solid #444";
+    btn.style.borderRadius = "6px";
+    btn.style.background = "#222";
+    btn.style.color = "#fff";
+    btn.style.cursor = "pointer";
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const done = (ok) => {
+        lastAuthInfoMessage = ok ? "パスワードをコピーしました。password欄に貼り付けてください。" : "パスワードのコピーに失敗しました。";
+        lastAuthErrorMessage = "";
+        try {
+          renderMenu({ ok: true, passkeys: [] });
+        } catch {}
+      };
+
+      try {
+        if (navigator?.clipboard?.writeText) {
+          navigator.clipboard.writeText(pwd).then(
+            () => done(true),
+            () => done(copyTextToClipboardSync(pwd))
+          );
+          return;
+        }
+      } catch {}
+
+      done(copyTextToClipboardSync(pwd));
+    });
+
+    wrap.appendChild(btn);
+    listEl.appendChild(wrap);
+    return true;
+  }
+
+  function tryAutofillJetBrainsPassword(passwordValue) {
+    try {
+      const host = (window.location.hostname || "").trim().toLowerCase();
+      const isJetBrains = host === "account.jetbrains.com" || host.endsWith(".jetbrains.com");
+      if (!isJetBrains) return false;
+      const pwdEl =
+        document.getElementById("password") ||
+        querySelectorDeep("#password, input[name='password'], input[type='password']");
+      if (!(pwdEl instanceof HTMLElement)) return false;
+      const value = String(passwordValue ?? "");
+      if (!value) return false;
+
+      const applyOnce = () => {
+        try {
+          try {
+            pwdEl.focus();
+          } catch {}
+          try {
+            setInputValue(pwdEl, value);
+          } catch {}
+          try {
+            pwdEl.setAttribute("value", value);
+          } catch {}
+          try {
+            pwdEl.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          } catch {}
+          try {
+            pwdEl.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          } catch {}
+        } catch {}
+      };
+
+      // 即時 + 次フレーム + 少し遅延で複数回当てる（サイト側の巻き戻し対策）
+      applyOnce();
+      try {
+        requestAnimationFrame(() => applyOnce());
+      } catch {
+        setTimeout(applyOnce, 0);
+      }
+      setTimeout(applyOnce, 30);
+      setTimeout(applyOnce, 120);
+
+      try {
+        const len = String(pwdEl.value ?? pwdEl.textContent ?? "").length;
+        return len > 0;
+      } catch {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  async function resolvePasswordFromVaultForSelection(selectedItem) {
+    try {
+      const host = (window.location.hostname || "").trim().toLowerCase();
+      if (!host) return "";
+      const user = String(selectedItem?.user ?? "").trim().toLowerCase();
+      if (!user) return "";
+
+      // WindowsApps版 tsupasswd_core.exe は vault.login.list で password を返さない。
+      // そのため拡張側（popup.js）が保持する chrome.storage.local のキャッシュを優先する。
+      try {
+        const itemId = String(selectedItem?.id ?? selectedItem?.itemId ?? "").trim();
+        if (itemId && chrome?.storage?.local?.get) {
+          const cache = await new Promise((resolve) => {
+            try {
+              chrome.storage.local.get(["vaultPasswordCache"], (res) => {
+                if (chrome.runtime.lastError) {
+                  resolve({});
+                  return;
+                }
+                resolve(res?.vaultPasswordCache && typeof res.vaultPasswordCache === "object" ? res.vaultPasswordCache : {});
+              });
+            } catch {
+              resolve({});
+            }
+          });
+          const cachedPassword = String(cache?.[itemId] ?? "");
+          if (cachedPassword) return cachedPassword;
+        }
+      } catch {}
+
+      const pickPassword = (passkeys) => {
+        if (!Array.isArray(passkeys) || passkeys.length === 0) return "";
+        const byUser = passkeys.filter((p) => {
+          const pUser = String(p?.user ?? "").trim().toLowerCase();
+          return pUser && pUser === user;
+        });
+        const hit = byUser.find((c) => String(c?.password ?? "")) || passkeys.find((c) => String(c?.password ?? ""));
+        return String(hit?.password ?? "");
+      };
+
+      const first = await requestVaultLoginList(host);
+      if (first?.ok && Array.isArray(first.passkeys)) {
+        const pwd = pickPassword(first.passkeys);
+        if (pwd) return pwd;
+      }
+
+      // URL/rpId未設定でhostフィルタに引っかからないVaultアイテムがあるため、全件から再探索する。
+      const all = await requestVaultLoginList("");
+      if (!all?.ok || !Array.isArray(all.passkeys)) return "";
+
+      const hostNeedle = host;
+      const related = all.passkeys.filter((p) => {
+        const pUser = String(p?.user ?? "").trim().toLowerCase();
+        if (!pUser || pUser !== user) return false;
+        const rp = String(p?.rpId ?? "").trim().toLowerCase();
+        const url = String(p?.url ?? "").trim().toLowerCase();
+        const title = String(p?.title ?? "").trim().toLowerCase();
+        if (rp && isRpIdRelatedToHost(rp, hostNeedle)) return true;
+        if (url && (url.includes(hostNeedle) || url.includes("jetbrains"))) return true;
+        if (title && title.includes("jetbrains")) return true;
+        return false;
+      });
+
+      const pwd2 = pickPassword(related);
+      if (pwd2) return pwd2;
+      return pickPassword(all.passkeys);
+    } catch {
+      return "";
+    }
+  }
+
+  let pendingCredentialForSubmit = null;
+  let jetBrainsSubmitHookInstalled = false;
+
+  function ensureJetBrainsSubmitHook() {
+    if (jetBrainsSubmitHookInstalled) return;
+    const host = (window.location.hostname || "").trim().toLowerCase();
+    const isJetBrains = host === "account.jetbrains.com" || host.endsWith(".jetbrains.com");
+    if (!isJetBrains) return;
+
+    jetBrainsSubmitHookInstalled = true;
+    let isReplayingKick = false;
+
+    const applyPendingToScope = (scope) => {
+      try {
+        const info = pendingCredentialForSubmit;
+        if (!info || typeof info !== "object") return false;
+        if (Date.now() > (info.expiresAt ?? 0)) {
+          pendingCredentialForSubmit = null;
+          return false;
+        }
+
+        const root = scope instanceof Element || scope instanceof Document ? scope : document;
+        const emailEl = root.querySelector("#email, input[name='email'], input[autocomplete='username']") ||
+          querySelectorDeep("#email, input[name='email'], input[autocomplete='username']");
+        const pwdEl = root.querySelector("#password, input[name='password'], input[type='password']") ||
+          querySelectorDeep("#password, input[name='password'], input[type='password']");
+
+        if (emailEl instanceof HTMLElement && info.userValue) {
+          // emailは通常のイベント送出で問題になりづらい
+          applyValueToInput(emailEl, info.userValue, { focusInput: false, emitChange: true, emitCommitEvents: false });
+        }
+        if (pwdEl instanceof HTMLElement && info.passwordValue) {
+          // JetBrainsはpasswordに対してisTrusted等でイベント経由の反映を拒否/巻き戻す可能性があるため
+          // クリック直前はイベントを送出せず、DOM値だけを即時に差し込む。
+          try {
+            pwdEl.focus();
+          } catch {}
+          try {
+            setInputValue(pwdEl, info.passwordValue);
+            pwdEl.setAttribute("value", String(info.passwordValue));
+          } catch {}
+          // 念のためもう一度（サイト側がfocusでクリアするケース対策）
+          try {
+            if (String(pwdEl.value ?? "") === "") {
+              setInputValue(pwdEl, info.passwordValue);
+              pwdEl.setAttribute("value", String(info.passwordValue));
+            }
+          } catch {}
+
+          // それでも空のままの場合: setRangeText / execCommand による疑似タイピングを試す
+          try {
+            const stillEmpty = String(pwdEl.value ?? pwdEl.textContent ?? "") === "";
+            if (stillEmpty) {
+              if (pwdEl instanceof HTMLInputElement || pwdEl instanceof HTMLTextAreaElement) {
+                try {
+                  pwdEl.setSelectionRange(0, pwdEl.value.length);
+                } catch {}
+                try {
+                  pwdEl.setRangeText(String(info.passwordValue), 0, pwdEl.value.length, "end");
+                } catch {}
+              }
+              try {
+                document.execCommand && document.execCommand("insertText", false, String(info.passwordValue));
+              } catch {}
+              try {
+                pwdEl.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+              } catch {}
+            }
+          } catch {}
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const looksLikeSubmitTrigger = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el instanceof HTMLButtonElement) {
+        const t = String(el.type || "").toLowerCase();
+        if (t === "submit") return true;
+      }
+      if (el instanceof HTMLInputElement) {
+        const t = String(el.type || "").toLowerCase();
+        if (t === "submit" || t === "button") return true;
+      }
+      const label = String(el.getAttribute("aria-label") || el.getAttribute("title") || el.textContent || "")
+        .trim()
+        .toLowerCase();
+      return (
+        label.includes("continue") ||
+        label.includes("sign in") ||
+        label.includes("sign-in") ||
+        label.includes("signin") ||
+        label.includes("login") ||
+        label.includes("log in")
+      );
+    };
+
+    const onAnyKick = (ev) => {
+      try {
+        const target = ev.target;
+        if (!(target instanceof Element)) return;
+        const btn = target.closest("button, input[type='submit'], input[type='button'], [role='button']");
+        if (!(btn instanceof HTMLElement)) return;
+        if (!looksLikeSubmitTrigger(btn)) return;
+
+        const form = typeof btn.closest === "function" ? btn.closest("form") : null;
+        const scope = form instanceof HTMLFormElement ? form : document;
+
+        const pwdEl = scope.querySelector("#password, input[name='password'], input[type='password']") ||
+          querySelectorDeep("#password, input[name='password'], input[type='password']");
+        const pwdEmpty = !(pwdEl instanceof HTMLElement) || String(pwdEl.value ?? pwdEl.textContent ?? "") === "";
+        const shouldIntercept = Boolean(pendingCredentialForSubmit?.passwordValue) && pwdEmpty;
+
+        if (shouldIntercept && !isReplayingKick) {
+          try {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            ev.stopPropagation();
+          } catch {}
+          applyPendingToScope(scope);
+
+          isReplayingKick = true;
+          try {
+            clickElementRobust(btn);
+          } catch {}
+          isReplayingKick = false;
+          return;
+        }
+
+        applyPendingToScope(scope);
+      } catch {}
+    };
+
+    document.addEventListener("pointerdown", onAnyKick, true);
+    document.addEventListener("click", onAnyKick, true);
+    document.addEventListener(
+      "submit",
+      (e) => {
+        try {
+          applyPendingToScope(e.target);
+        } catch {}
+      },
+      true
+    );
+  }
+
   function clickElementSimple(el) {
     if (!(el instanceof HTMLElement)) return false;
     if (el instanceof HTMLButtonElement && el.disabled) return false;
@@ -37,6 +359,228 @@
     } catch {
       return false;
     }
+  }
+
+  async function copyTextToClipboard(text) {
+    const t = String(text ?? "");
+    if (!t) return false;
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand && document.execCommand("copy");
+      ta.remove();
+      if (ok) return true;
+    } catch {}
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(t);
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  function copyTextToClipboardSync(text) {
+    const t = String(text ?? "");
+    if (!t) return false;
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand && document.execCommand("copy");
+      ta.remove();
+      return Boolean(ok);
+    } catch {
+      return false;
+    }
+  }
+
+  function focusJetBrainsPasswordAndKickOnPaste(timeoutMs = 30_000) {
+    const host = (window.location.hostname || "").trim().toLowerCase();
+    const isJetBrains = host === "account.jetbrains.com" || host.endsWith(".jetbrains.com");
+    if (!isJetBrains) return false;
+
+    // JetBrains の /api/auth/sessions はレート制限が厳しいため、貼り付け後の自動submitはクールダウンする。
+    try {
+      const now = Date.now();
+      const last = Number((window).__tsupasswdJetBrainsLastSubmitAt ?? 0);
+      if (now - last < 8_000) {
+        // 直近でsubmit試行済み。連打を避ける。
+        return false;
+      }
+    } catch {}
+
+    const pwd =
+      document.getElementById("password") ||
+      querySelectorDeep("#password, input[type='password'][name='password']");
+    if (!(pwd instanceof HTMLElement)) return false;
+
+    try {
+      pwd.focus();
+    } catch {}
+
+    const deadline = Date.now() + timeoutMs;
+    let hasKicked = false;
+    const tryKick = () => {
+      try {
+        if (hasKicked) return;
+        if (Date.now() > deadline) {
+          pwd.removeEventListener("input", onInput, true);
+          pwd.removeEventListener("paste", onPaste, true);
+          return;
+        }
+        const len = String(pwd.value ?? pwd.textContent ?? "").length;
+        if (len > 0) {
+          try {
+            activeInput = pwd;
+          } catch {}
+
+          const form = typeof pwd.closest === "function" ? pwd.closest("form") : null;
+
+          const looksLikeLoginButton = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const label = String(el.getAttribute("aria-label") || el.getAttribute("title") || el.textContent || "")
+              .trim()
+              .toLowerCase();
+            if (!label) return false;
+            return (
+              label.includes("log in") ||
+              label.includes("login") ||
+              label.includes("sign in") ||
+              label.includes("signin") ||
+              label.includes("continue")
+            );
+          };
+
+          const findLoginButton = () => {
+            const submitCandidates = [];
+            try {
+              if (form instanceof HTMLFormElement) {
+                submitCandidates.push(
+                  ...Array.from(form.querySelectorAll("button, input[type='submit'], [role='button']")).filter(
+                    (x) => x instanceof HTMLElement
+                  )
+                );
+              }
+            } catch {}
+            try {
+              submitCandidates.push(
+                ...queryAllDeep("button, input[type='submit'], [role='button']").filter((x) => x instanceof HTMLElement)
+              );
+            } catch {}
+
+            return (
+              submitCandidates.find((b) => looksLikeLoginButton(b)) ||
+              (form instanceof HTMLFormElement ? form.querySelector("button[type='submit'], input[type='submit']") : null) ||
+              querySelectorDeep("button[type='submit'], input[type='submit']")
+            );
+          };
+
+          let submittedEver = false;
+          const trySubmitOnce = () => {
+            if (submittedEver) return true;
+            let submitted = false;
+            const btn = findLoginButton();
+
+            try {
+              if (btn instanceof HTMLElement) {
+                const clicked = clickElementRobust(btn);
+                submitted = submitted || clicked;
+              }
+            } catch {}
+            try {
+              if (!submitted && form instanceof HTMLFormElement && typeof form.requestSubmit === "function") {
+                try {
+                  form.requestSubmit(btn instanceof HTMLElement ? btn : undefined);
+                } catch {
+                  form.requestSubmit();
+                }
+                submitted = true;
+              }
+            } catch {}
+            try {
+              if (!submitted && form instanceof HTMLFormElement) {
+                form.submit();
+                submitted = true;
+              }
+            } catch {}
+            try {
+              if (!submitted) {
+                pwd.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, composed: true, key: "Enter" }));
+                pwd.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, composed: true, key: "Enter" }));
+              }
+            } catch {}
+
+            // 見つかれば常にフォーカス（ユーザーがすぐ押せるように）
+            if (btn instanceof HTMLElement) {
+              try {
+                btn.focus();
+                btn.scrollIntoView({ block: "nearest", inline: "nearest" });
+              } catch {}
+            }
+
+            if (submitted) {
+              submittedEver = true;
+              try {
+                (window).__tsupasswdJetBrainsLastSubmitAt = Date.now();
+              } catch {}
+            }
+            return submitted;
+          };
+
+          // paste/input は user gesture になりやすいので即時試行。
+          // ただし JetBrains 側のDOM/validation更新を待つ必要があるため短時間リトライする。
+          const submittedNow = trySubmitOnce();
+          // リトライは最小限（DOM更新待ちの1回だけ）にする。多重POSTを避ける。
+          setTimeout(() => {
+            trySubmitOnce();
+          }, 200);
+
+          lastAuthInfoMessage = submittedNow
+            ? "password貼り付け完了。Log in を試行しました（ブロックされる場合は手動で押してください）。"
+            : "password貼り付け完了。Log in を押してください。";
+          try {
+            renderMenu({ ok: true, passkeys: [] });
+          } catch {}
+
+          hasKicked = true;
+          try {
+            pwd.removeEventListener("input", onInput, true);
+            pwd.removeEventListener("paste", onPaste, true);
+          } catch {}
+          return;
+        }
+      } catch {}
+    };
+    const onInput = () => tryKick();
+    const onPaste = () => {
+      // pasteはuser gesture内になりやすいので即時に試す
+      tryKick();
+      try {
+        queueMicrotask(tryKick);
+      } catch {
+        Promise.resolve().then(tryKick);
+      }
+      setTimeout(tryKick, 0);
+      setTimeout(tryKick, 50);
+    };
+
+    pwd.addEventListener("input", onInput, true);
+    pwd.addEventListener("paste", onPaste, true);
+    return true;
   }
 
   function updateModeToggleLabel() {
@@ -74,8 +618,8 @@
 
   function sourceDisplayName(source) {
     const normalized = normalizeSource(source);
-    if (normalized === "windows_hello") return "Windows Hello（OS）";
-    if (normalized === "tsupasswd_core") return "tsupasswd_core（拡張）";
+    if (normalized === "windows_hello") return "Passkey（Windows Hello / OS）";
+    if (normalized === "tsupasswd_core") return "Vaultログイン（tsupasswd_core）";
     return normalized;
   }
 
@@ -822,6 +1366,73 @@
     });
   }
 
+  function loadVaultPasswordCacheFromStorage() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(["vaultPasswordCache"], (res) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: String(chrome.runtime.lastError.message ?? chrome.runtime.lastError), cache: {} });
+            return;
+          }
+          const cache = res?.vaultPasswordCache && typeof res.vaultPasswordCache === "object" ? res.vaultPasswordCache : {};
+          resolve({ ok: true, cache });
+        });
+      } catch (e) {
+        resolve({ ok: false, error: String(e?.message ?? e), cache: {} });
+      }
+    });
+  }
+
+  function setCachedVaultPasswordToStorage(itemId, password) {
+    const id = String(itemId ?? "").trim();
+    const pwd = String(password ?? "");
+    if (!id || !pwd) {
+      return Promise.resolve({ ok: false, error: "missing_id_or_password" });
+    }
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(["vaultPasswordCache"], (res) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: String(chrome.runtime.lastError.message ?? chrome.runtime.lastError) });
+            return;
+          }
+          const prev = res?.vaultPasswordCache && typeof res.vaultPasswordCache === "object" ? res.vaultPasswordCache : {};
+          const next = { ...prev, [id]: pwd };
+          chrome.storage.local.set({ vaultPasswordCache: next }, () => {
+            if (chrome.runtime.lastError) {
+              resolve({ ok: false, error: String(chrome.runtime.lastError.message ?? chrome.runtime.lastError) });
+              return;
+            }
+            chrome.storage.local.get(["vaultPasswordCache"], (verify) => {
+              if (chrome.runtime.lastError) {
+                resolve({ ok: false, error: String(chrome.runtime.lastError.message ?? chrome.runtime.lastError) });
+                return;
+              }
+              const cache = verify?.vaultPasswordCache && typeof verify.vaultPasswordCache === "object" ? verify.vaultPasswordCache : {};
+              resolve({ ok: String(cache?.[id] ?? "") === pwd, stored: Boolean(cache?.[id]) });
+            });
+          });
+        });
+      } catch (e) {
+        resolve({ ok: false, error: String(e?.message ?? e) });
+      }
+    });
+  }
+
+  function tryExtractVaultItemIdFromNativePayload(native) {
+    try {
+      return (
+        native?.result?.itemId ??
+        native?.result?.id ??
+        native?.itemId ??
+        native?.id ??
+        ""
+      );
+    } catch {
+      return "";
+    }
+  }
+
   function requestVaultLoginSave({ title, username, password, url, notes }) {
     return new Promise((resolve) => {
       if (!chrome?.runtime?.sendMessage) {
@@ -855,7 +1466,7 @@
                 password: String(password ?? ""),
                 url: String(url ?? ""),
                 notes: String(notes ?? ""),
-                resync: true,
+                resync: false,
                 requestId
               }
             },
@@ -1049,7 +1660,28 @@
 
     const dispatchInputEvents = (targetEl) => {
       if (!(targetEl instanceof HTMLElement)) return;
-      targetEl.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      try {
+        try {
+          targetEl.dispatchEvent(
+            new InputEvent("beforeinput", {
+              bubbles: true,
+              composed: true,
+              inputType: "insertReplacementText",
+              data: ""
+            })
+          );
+        } catch {}
+        targetEl.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            composed: true,
+            inputType: "insertReplacementText",
+            data: ""
+          })
+        );
+      } catch {
+        targetEl.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      }
       if (emitChange) {
         targetEl.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       }
@@ -1186,7 +1818,14 @@
     if (el instanceof HTMLInputElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       if (setter) {
+        const prev = el.value;
         setter.call(el, value);
+        try {
+          const tracker = el._valueTracker;
+          if (tracker && typeof tracker.setValue === "function") {
+            tracker.setValue(String(prev ?? ""));
+          }
+        } catch {}
         return;
       }
     }
@@ -1194,12 +1833,26 @@
     if (el instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       if (setter) {
+        const prev = el.value;
         setter.call(el, value);
+        try {
+          const tracker = el._valueTracker;
+          if (tracker && typeof tracker.setValue === "function") {
+            tracker.setValue(String(prev ?? ""));
+          }
+        } catch {}
         return;
       }
     }
 
+    const prev = el.value;
     el.value = value;
+    try {
+      const tracker = el._valueTracker;
+      if (tracker && typeof tracker.setValue === "function") {
+        tracker.setValue(String(prev ?? ""));
+      }
+    } catch {}
   }
 
   function applyValueToInput(targetInput, value, options = {}) {
@@ -1226,7 +1879,21 @@
 
     const dispatchInputEvents = (el) => {
       if (!(el instanceof HTMLElement)) return;
-      el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      try {
+        try {
+          el.dispatchEvent(
+            new InputEvent("beforeinput", {
+              bubbles: true,
+              composed: true,
+              inputType: "insertReplacementText",
+              data: ""
+            })
+          );
+        } catch {}
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: "" }));
+      } catch {
+        el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      }
       if (emitChange) {
         el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       }
@@ -1247,16 +1914,35 @@
 
   function fillCredentialInputs(passkey, options = {}) {
     const { closeMenu = true } = options;
-    const related = findRelatedCredentialInputs(activeInput);
+    let related = findRelatedCredentialInputs(activeInput);
     const userValue = String(passkey?.user ?? "").trim();
     const passwordValue = String(passkey?.password ?? passkey?.secret ?? "");
     let applied = false;
 
+    const host = (window.location.hostname || "").trim().toLowerCase();
+    const isJetBrains = host === "account.jetbrains.com" || host.endsWith(".jetbrains.com");
+    if (isJetBrains) {
+      ensureJetBrainsSubmitHook();
+      pendingCredentialForSubmit = {
+        userValue,
+        passwordValue,
+        expiresAt: Date.now() + 30_000
+      };
+    }
+
     if (related.userInput && userValue) {
       applied = applyValueToInput(related.userInput, userValue, { focusInput: true, emitChange: true }) || applied;
     }
+
+    // user反映でフォームが再描画されpassword要素が差し替わるケースがあるため、再探索する
+    related = findRelatedCredentialInputs(activeInput);
     if (related.passwordInput && passwordValue) {
-      applied = applyValueToInput(related.passwordInput, passwordValue, { focusInput: !applied, emitChange: true }) || applied;
+      applied =
+        applyValueToInput(related.passwordInput, passwordValue, {
+          focusInput: true,
+          emitChange: true,
+          emitCommitEvents: false
+        }) || applied;
     }
 
     if (applied && closeMenu) {
@@ -1574,8 +2260,38 @@
       });
 
       if (saveResult?.ok) {
-        lastAuthInfoMessage = "Vaultへ保存しました。";
-        lastAuthErrorMessage = "";
+        let savedId = "";
+        try {
+          const native = saveResult?.payload;
+          savedId = String(tryExtractVaultItemIdFromNativePayload(native) || "").trim();
+        } catch {}
+
+        if (!savedId) {
+          try {
+            const listRes = await requestVaultLoginList(rpId);
+            const candidates = Array.isArray(listRes?.passkeys) ? listRes.passkeys : [];
+            const match = candidates.find((p) => {
+              const u = String(p?.user ?? "").trim();
+              const url = String(p?.url ?? "").trim();
+              return (userValue ? u === userValue : true) && (saveUrl ? url === saveUrl : true);
+            });
+            savedId = String(match?.id ?? "").trim();
+          } catch {}
+        }
+
+        if (passwordValue && savedId) {
+          const cacheRes = await setCachedVaultPasswordToStorage(savedId, passwordValue);
+          if (cacheRes?.ok) {
+            lastAuthInfoMessage = "Vaultへ保存しました。(passwordキャッシュ保存: ok)";
+            lastAuthErrorMessage = "";
+          } else {
+            lastAuthInfoMessage = "Vaultへ保存しました。";
+            lastAuthErrorMessage = `passwordキャッシュ保存失敗: ${cacheRes?.error || "unknown"}`;
+          }
+        } else {
+          lastAuthInfoMessage = "Vaultへ保存しました。";
+          lastAuthErrorMessage = passwordValue ? (savedId ? "" : "passwordキャッシュ対象のitemId取得に失敗") : "";
+        }
         const anchor = getMenuRefreshAnchor();
         if (anchor) {
           openMenuForInput(anchor);
@@ -1818,15 +2534,144 @@
         isMenuPinned = false;
         isPointerInMenu = false;
         if (shouldShowCredentialPair) {
-          const applied = fillCredentialInputs(p, { closeMenu: true });
+          const host = (window.location.hostname || "").trim().toLowerCase();
+          const isJetBrains = host === "account.jetbrains.com" || host.endsWith(".jetbrains.com");
+
+          const selectedPasswordRaw = String(p?.password || p?.secret || "");
+          const selectedPassword = selectedPasswordRaw; // passwordはtrimしない（先頭末尾スペースを保持するため）
+
+          const isVaultLogin = normalizeSource(p?.source) === "tsupasswd_core";
+          let effectivePassword = selectedPassword;
+          if (isVaultLogin && !effectivePassword) {
+            try {
+              effectivePassword = await resolvePasswordFromVaultForSelection(p);
+            } catch {
+              effectivePassword = "";
+            }
+          }
+
+          const filledPasskey = effectivePassword ? { ...p, password: effectivePassword } : p;
+          const applied = fillCredentialInputs(filledPasskey, { closeMenu: !isJetBrains });
+
+          if (isJetBrains) {
+            const armedNow = focusJetBrainsPasswordAndKickOnPaste(30_000);
+
+            if (!effectivePassword) {
+              lastAuthInfoMessage = `選択: ${userLabel} / passwordが空のためVaultから取得中...${armedNow ? " / password欄へ貼り付け" : ""}`;
+              lastAuthErrorMessage = "";
+              renderMenu({ ok: true, passkeys });
+
+              (async () => {
+                const vaultPassword = await resolvePasswordFromVaultForSelection(p);
+                if (!vaultPassword) {
+                  lastAuthInfoMessage = `選択: ${userLabel} / passwordが空のためコピーできません`;
+                  lastAuthErrorMessage = "";
+                  renderMenu({ ok: true, passkeys });
+                  return;
+                }
+
+                try {
+                  if (pendingCredentialForSubmit && typeof pendingCredentialForSubmit === "object") {
+                    pendingCredentialForSubmit.passwordValue = vaultPassword;
+                  }
+                } catch {}
+
+                try {
+                  fillCredentialInputs({ ...p, password: vaultPassword }, { closeMenu: false });
+                } catch {}
+
+                const autoFilled = tryAutofillJetBrainsPassword(vaultPassword);
+                if (autoFilled) {
+                  lastAuthInfoMessage = `選択: ${userLabel} / password欄へ自動入力しました。Log in を押してください。`;
+                  lastAuthErrorMessage = "";
+                  renderMenu({ ok: true, passkeys });
+                  appendJetBrainsCopyControls(vaultPassword);
+                  return;
+                }
+
+                const copiedNow = copyTextToClipboardSync(vaultPassword);
+                lastAuthInfoMessage = `選択: ${userLabel} / ${copiedNow ? "パスワードをクリップボードへコピー" : "パスワードコピー失敗"}${armedNow ? " / password欄へ貼り付け" : ""}`;
+                lastAuthErrorMessage = "";
+                renderMenu({ ok: true, passkeys });
+                appendJetBrainsCopyControls(vaultPassword);
+              })();
+
+              setTimeout(() => {
+                isActivated = false;
+              }, 0);
+              return;
+            }
+
+            const autoFilled = tryAutofillJetBrainsPassword(effectivePassword);
+            if (autoFilled) {
+              try {
+                if (pendingCredentialForSubmit && typeof pendingCredentialForSubmit === "object") {
+                  pendingCredentialForSubmit.passwordValue = effectivePassword;
+                }
+              } catch {}
+
+              lastAuthInfoMessage = `選択: ${userLabel} / password欄へ自動入力しました。Log in を押してください。`;
+              lastAuthErrorMessage = "";
+              renderMenu({ ok: true, passkeys });
+              appendJetBrainsCopyControls(effectivePassword);
+              setTimeout(() => {
+                isActivated = false;
+              }, 0);
+              return;
+            }
+
+            let started = false;
+            try {
+              if (navigator?.clipboard?.writeText) {
+                started = true;
+                navigator.clipboard
+                  .writeText(effectivePassword)
+                  .then(
+                    () => {
+                      lastAuthInfoMessage = `選択: ${userLabel} / パスワードをクリップボードへコピー${armedNow ? " / password欄へ貼り付け" : ""}`;
+                      lastAuthErrorMessage = "";
+                      renderMenu({ ok: true, passkeys });
+                      appendJetBrainsCopyControls(effectivePassword);
+                    },
+                    () => {
+                      const okSync = copyTextToClipboardSync(effectivePassword);
+                      lastAuthInfoMessage = `選択: ${userLabel} / ${okSync ? "パスワードをクリップボードへコピー" : "パスワードコピー失敗"}${armedNow ? " / password欄へ貼り付け" : ""}`;
+                      lastAuthErrorMessage = "";
+                      renderMenu({ ok: true, passkeys });
+                      appendJetBrainsCopyControls(effectivePassword);
+                    }
+                  );
+              }
+            } catch {}
+
+            if (!started) {
+              const okSync = copyTextToClipboardSync(effectivePassword);
+              lastAuthInfoMessage = `選択: ${userLabel} / ${okSync ? "パスワードをクリップボードへコピー" : "パスワードコピー失敗"}${armedNow ? " / password欄へ貼り付け" : ""}`;
+              lastAuthErrorMessage = "";
+              renderMenu({ ok: true, passkeys });
+              appendJetBrainsCopyControls(effectivePassword);
+            } else {
+              lastAuthInfoMessage = `選択: ${userLabel} / パスワードをクリップボードへコピー中...${armedNow ? " / password欄へ貼り付け" : ""}`;
+              lastAuthErrorMessage = "";
+              renderMenu({ ok: true, passkeys });
+            }
+
+            setTimeout(() => {
+              isActivated = false;
+            }, 0);
+            return;
+          }
+
           if (applied) {
             const kicked = tryClickSubmitLikeButton(activeInput);
             lastAuthInfoMessage = `選択: ${userLabel} / 資格情報を入力欄へ反映${kicked ? " / ボタンをクリック" : ""}`;
             lastAuthErrorMessage = "";
+            renderMenu({ ok: true, passkeys });
           } else {
             lastAuthErrorMessage = "入力欄へ値を反映できませんでした。対象入力欄をクリックして再試行してください。";
+            renderMenu({ ok: true, passkeys });
           }
-          renderMenu({ ok: true, passkeys });
+
           setTimeout(() => {
             isActivated = false;
           }, 0);

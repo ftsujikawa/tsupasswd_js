@@ -1,5 +1,5 @@
 param(
-  [string]$ExtensionId = "khcgmggnifgegehckhiaodlnackcnoop",
+  [string]$ExtensionId = "cmodllncabncibkbleljmljfkehgkopn",
   [string]$SourceHostExePath = (Join-Path $PSScriptRoot "native-host\BridgeHost\bin\Release\net8.0-windows\win-x64\publish\tsupasswd-bridge-host.exe"),
   [string]$VaultHostExePath = (Join-Path $PSScriptRoot "native-host\VaultHost\bin\Release\net8.0\win-x64\publish\tsupasswd-vault-host.exe"),
   [string]$CoreExePath = "",

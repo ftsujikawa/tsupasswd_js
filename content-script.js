@@ -1548,7 +1548,7 @@
                 password: String(password ?? ""),
                 url: String(url ?? ""),
                 notes: String(notes ?? ""),
-                resync: false,
+                resync: true,
                 requestId
               }
             },

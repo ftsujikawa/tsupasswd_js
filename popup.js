@@ -577,7 +577,7 @@ try {
         password,
         url: inputUrl,
         notes: (vaultNotesEl?.value ?? "").trim(),
-        resync: false,
+        resync: true,
         requestId: `vault-save-${Date.now()}`
       });
       if (payloadEl) {
@@ -661,7 +661,7 @@ try {
         password,
         url: inputUrl,
         notes: (vaultNotesEl?.value ?? "").trim(),
-        resync: false,
+        resync: true,
         requestId: `vault-update-${Date.now()}`
       });
       if (payloadEl) {

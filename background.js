@@ -7,6 +7,7 @@ const NATIVE_DEBUG_DEFAULT = false;
 
 const AUTO_SYNC_ALARM_NAME = "tsupasswd-auto-resync";
 const AUTO_SYNC_STORAGE_KEY = "tsupasswdSyncConfig";
+const AUTO_SYNC_STATUS_KEY = "tsupasswdAutoResyncStatus";
 const AUTO_SYNC_DEFAULT_PERIOD_MINUTES = 1;
 
 async function getStoredSyncConfig() {
@@ -19,11 +20,23 @@ async function getStoredSyncConfig() {
     const enabled = cfg?.enabled === undefined ? true : Boolean(cfg?.enabled);
     const periodMinutesRaw = Number(cfg?.periodMinutes ?? AUTO_SYNC_DEFAULT_PERIOD_MINUTES);
     const periodMinutes = Number.isFinite(periodMinutesRaw) ? Math.max(1, Math.floor(periodMinutesRaw)) : AUTO_SYNC_DEFAULT_PERIOD_MINUTES;
-    if (!email || !baseUrl) return { email, baseUrl, enabled, periodMinutes };
+    if (!email || !baseUrl) return null;
     return { email, baseUrl, enabled, periodMinutes };
   } catch {
     return null;
   }
+}
+
+async function setAutoResyncStatus(patch = {}) {
+  try {
+    const prev = await chrome.storage.local.get(AUTO_SYNC_STATUS_KEY);
+    const current = prev?.[AUTO_SYNC_STATUS_KEY];
+    const next = {
+      ...(current && typeof current === "object" ? current : {}),
+      ...(patch && typeof patch === "object" ? patch : {})
+    };
+    await chrome.storage.local.set({ [AUTO_SYNC_STATUS_KEY]: next });
+  } catch {}
 }
 
 async function ensureAutoResyncAlarm() {
@@ -48,17 +61,100 @@ async function runAutoResync(reason = "alarm") {
   const baseUrl = String(cfg.baseUrl ?? "").trim();
   if (!email || !baseUrl) return;
   try {
+    const requestId = `auto-resync-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const payload = buildVaultRequest("vault.sync.resync", {
       email,
       baseUrl,
-      requestId: `auto-resync-${Date.now()}`,
+      requestId,
       reason
     });
+    await setAutoResyncStatus({
+      lastAttemptAt: new Date().toISOString(),
+      lastReason: reason,
+      lastRequestId: requestId,
+      lastOk: null,
+      lastError: null
+    });
+
     const p = ensurePort("vault");
     debugNativeLog("auto-resync:postMessage", { reason, email, baseUrl, payload });
-    p.postMessage(payload);
+
+    const res = await new Promise((resolve) => {
+      let settled = false;
+      let timeoutId = null;
+
+      const cleanup = () => {
+        try {
+          p.onMessage.removeListener(onPortMessage);
+        } catch {}
+        try {
+          p.onDisconnect.removeListener(onPortDisconnect);
+        } catch {}
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      const settle = (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+
+      const onPortMessage = (msg) => {
+        const msgRequestId = msg?.requestId ?? msg?.id;
+        if (msgRequestId !== requestId) return;
+        settle({ ok: true, raw: msg });
+      };
+
+      const onPortDisconnect = () => {
+        settle({ ok: false, error: chrome.runtime.lastError?.message ?? "Native host disconnected." });
+      };
+
+      try {
+        p.onMessage.addListener(onPortMessage);
+        p.onDisconnect.addListener(onPortDisconnect);
+      } catch {}
+
+      timeoutId = setTimeout(() => {
+        settle({ ok: false, error: "timeout" });
+      }, 15000);
+
+      try {
+        p.postMessage(payload);
+      } catch (e) {
+        settle({ ok: false, error: String(e?.message ?? e) });
+      }
+    });
+
+    if (res?.ok) {
+      const okProp = Boolean(res?.raw?.ok);
+      await setAutoResyncStatus({
+        lastDoneAt: new Date().toISOString(),
+        lastOk: okProp,
+        lastError: okProp ? null : String(res?.raw?.error ?? "unknown"),
+        lastDetail: okProp ? null : String(res?.raw?.detail ?? ""),
+        lastRaw: res?.raw ?? null
+      });
+    } else {
+      await setAutoResyncStatus({
+        lastDoneAt: new Date().toISOString(),
+        lastOk: false,
+        lastError: String(res?.error ?? "unknown"),
+        lastDetail: null,
+        lastRaw: null
+      });
+    }
   } catch (e) {
     debugNativeLog("auto-resync:error", { error: String(e) });
+    await setAutoResyncStatus({
+      lastDoneAt: new Date().toISOString(),
+      lastOk: false,
+      lastError: String(e?.message ?? e),
+      lastDetail: null
+    });
   }
 }
 
@@ -262,6 +358,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "sync-status-get") {
+    (async () => {
+      try {
+        const res = await chrome.storage.local.get([AUTO_SYNC_STORAGE_KEY, AUTO_SYNC_STATUS_KEY]);
+        sendResponse({
+          ok: true,
+          config: res?.[AUTO_SYNC_STORAGE_KEY] ?? null,
+          status: res?.[AUTO_SYNC_STATUS_KEY] ?? null
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message ?? e) });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === "sync-config-set") {
     (async () => {
       try {
@@ -283,6 +395,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
         });
         await ensureAutoResyncAlarm();
+        if (enabled) {
+          runAutoResync("config-set");
+        }
         sendResponse({ ok: true, email, baseUrl, enabled, periodMinutes });
       } catch (e) {
         sendResponse({ ok: false, error: String(e?.message ?? e) });

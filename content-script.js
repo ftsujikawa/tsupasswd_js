@@ -15,6 +15,13 @@
   let isMenuPinned = false;
   let hasTriggeredInvalidatedReload = false;
   const currentHost = (window.location.hostname || "").toLowerCase();
+  try {
+    if (String(window.location?.href ?? "") === "about:blank") {
+      return;
+    }
+  } catch {
+    return;
+  }
   const defaultShowAllPasskeys =
     currentHost === "passkeys-demo.appspot.com" || currentHost.endsWith(".passkeys-demo.appspot.com");
   let showAllPasskeys = defaultShowAllPasskeys;
@@ -638,8 +645,12 @@
     script.addEventListener("load", () => {
       (window)[PASSKEYS_DEMO_HOOK_FLAG] = true;
     });
-    document.documentElement.appendChild(script);
-    return true;
+    try {
+      document.documentElement.appendChild(script);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function getSearchRoots() {

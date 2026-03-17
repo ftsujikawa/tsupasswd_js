@@ -17,6 +17,7 @@ const pkIdEl = document.getElementById("pkId");
 const vaultStatusBtn = document.getElementById("vaultStatus");
 const vaultListBtn = document.getElementById("vaultList");
 const vaultResyncBtn = document.getElementById("vaultResync");
+const syncStatusBtn = document.getElementById("syncStatus");
 const vaultRowsEl = document.getElementById("vaultRows");
 const vaultTitleEl = document.getElementById("vaultTitle");
 const vaultUsernameEl = document.getElementById("vaultUsername");
@@ -492,6 +493,94 @@ try {
   if (connectVaultBtn) {
     connectVaultBtn.addEventListener("click", async () => {
       setResult(await sendMessage({ type: "vault-connect" }));
+    });
+  }
+
+  if (vaultStatusBtn) {
+    vaultStatusBtn.addEventListener("click", async () => {
+      setResult({ ok: true, state: "running", command: "vault.status.get" });
+      try {
+        const res = await readVaultStatus();
+        setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
+      } catch (e) {
+        setResult({ ok: false, command: "vault.status.get", error: String(e?.message ?? e) });
+      }
+    });
+  }
+
+  if (vaultListBtn) {
+    vaultListBtn.addEventListener("click", async () => {
+      setResult({ ok: true, state: "running", command: "vault.login.list" });
+      try {
+        await refreshVaultList();
+      } catch (e) {
+        setResult({ ok: false, command: "vault.login.list", error: String(e?.message ?? e) });
+      }
+    });
+  }
+
+  if (vaultResyncBtn) {
+    vaultResyncBtn.addEventListener("click", async () => {
+      let payload = buildVaultPayload("vault.sync.resync", { requestId: `vault-resync-${Date.now()}` });
+      if (payloadEl) {
+        const text = (payloadEl.value ?? "").trim();
+        if (text) {
+          try {
+            const edited = JSON.parse(text);
+            if (edited && typeof edited === "object") {
+              const editedPayload = edited?.payload && typeof edited.payload === "object" ? edited.payload : null;
+              if (edited.command === "vault.sync.resync") {
+                payload = {
+                  ...payload,
+                  ...edited,
+                  payload: {
+                    ...(payload.payload ?? {}),
+                    ...(editedPayload ?? {})
+                  }
+                };
+              } else if (editedPayload) {
+                payload = {
+                  ...payload,
+                  payload: {
+                    ...(payload.payload ?? {}),
+                    ...editedPayload
+                  }
+                };
+              }
+            }
+          } catch {}
+        }
+      }
+
+      try {
+        await persistSyncConfigToBackground({ email: payload?.payload?.email, baseUrl: payload?.payload?.baseUrl });
+      } catch {}
+
+      if (payloadEl) {
+        payloadEl.value = JSON.stringify(payload, null, 2);
+      }
+      setResult({ ok: true, state: "running", command: payload.command, id: payload.id });
+      try {
+        const res = await sendNativeAwait(payload, "vault");
+        setResult(res?.raw ?? res ?? { ok: false, error: "No response" });
+        if (res?.ok) {
+          await refreshVaultList({ suppressResult: true });
+        }
+      } catch (e) {
+        setResult({ ok: false, command: payload.command, error: String(e?.message ?? e) });
+      }
+    });
+  }
+
+  if (syncStatusBtn) {
+    syncStatusBtn.addEventListener("click", async () => {
+      setResult({ ok: true, state: "running", command: "sync-status-get" });
+      try {
+        const res = await sendMessage({ type: "sync-status-get" });
+        setResult(res ?? { ok: false, error: "No response" });
+      } catch (e) {
+        setResult({ ok: false, error: String(e?.message ?? e) });
+      }
     });
   }
 

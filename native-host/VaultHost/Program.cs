@@ -85,6 +85,31 @@ internal sealed class NativeMessagingVaultHost
             return new { ok = true, id, command, result = new { items } };
         }
 
+        if (string.Equals(command, "vault.login.get", StringComparison.OrdinalIgnoreCase))
+        {
+            var itemId = GetOptionalString(payload, "itemId") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                return new { ok = false, id, command, error = "invalid_argument", detail = "itemId is required." };
+            }
+
+            var includeSecret = GetOptionalBool(payload, "includeSecret") ?? false;
+            var store = LoadStore();
+            var index = Array.FindIndex(store.items, i => string.Equals(i.itemId, itemId, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+            {
+                return new { ok = false, id, command, error = "not_found", detail = "itemId was not found." };
+            }
+
+            var item = store.items[index];
+            if (includeSecret)
+            {
+                return new { ok = true, id, command, result = new { itemId = item.itemId, password = item.password } };
+            }
+
+            return new { ok = true, id, command, result = new { itemId = item.itemId } };
+        }
+
         if (string.Equals(command, "vault.login.save", StringComparison.OrdinalIgnoreCase))
         {
             var title = GetOptionalString(payload, "title") ?? string.Empty;

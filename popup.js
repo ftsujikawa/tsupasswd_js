@@ -29,6 +29,7 @@ const vaultUpdateBtn = document.getElementById("vaultUpdate");
 const vaultDeleteBtn = document.getElementById("vaultDelete");
 const vaultUndeleteBtn = document.getElementById("vaultUndelete");
 const vaultIncludeDeletedEl = document.getElementById("vaultIncludeDeleted");
+const vaultAutoFetchSecretEl = document.getElementById("vaultAutoFetchSecret");
 const sendPayloadBtn = document.getElementById("sendPayload");
 const vaultPushBtn = document.getElementById("vaultPush");
 
@@ -115,17 +116,38 @@ async function fetchVaultPasswordIntoCache(itemId) {
   const payload = buildVaultPayload("vault.login.get", {
     itemId: id,
     includeSecret: true,
-    requestId: `vault-get-${Date.now()}`
+    requestId: `vault-get-${Date.now()}`,
   });
   const res = await sendNativeAwait(payload, "vault");
-  const native = res?.payload ?? res?.raw ?? res;
-  const item = native?.result?.item ?? native?.item ?? null;
-  const pwd = String(item?.password ?? "");
-  if (!pwd.trim()) {
-    return { ok: false, error: "password_missing", native };
+  const password = String(res?.payload?.result?.password ?? res?.raw?.result?.password ?? "");
+  if (!password.trim()) {
+    return { ok: false, error: "empty_password", res: res?.raw ?? res };
   }
-  const saved = await setCachedVaultPassword(id, pwd);
-  return { ok: saved, itemId: id, saved, native };
+  const saved = await setCachedVaultPassword(id, password);
+  return { ok: Boolean(saved), itemId: id };
+}
+
+async function prefetchVaultSecrets(items) {
+  if (!vaultAutoFetchSecretEl?.checked) return;
+  if (!Array.isArray(items) || items.length === 0) return;
+  const limit = 20;
+  let count = 0;
+  for (const item of items) {
+    if (count >= limit) break;
+    const itemId = String(item?.itemId ?? "").trim();
+    if (!itemId) continue;
+    const cached = String(getCachedVaultPassword(item) || "").trim();
+    const embedded = String(item?.password ?? "").trim();
+    if (cached || embedded) continue;
+    const fetched = await fetchVaultPasswordIntoCache(itemId);
+    if (fetched?.ok) {
+      count += 1;
+    }
+  }
+  if (count > 0) {
+    vaultPasswordCache = await loadVaultPasswordCache();
+    renderVaultItems();
+  }
 }
 
 async function loadVaultPasswordCache() {
@@ -376,6 +398,7 @@ async function refreshVaultList(options = {}) {
   if (res?.ok && res?.payload && Array.isArray(res.payload.result?.items)) {
     lastVaultItems = res.payload.result.items;
     renderVaultItems();
+    await prefetchVaultSecrets(lastVaultItems);
     if (!(vaultItemIdEl.value ?? "").trim() && lastVaultItems.length === 1) {
       selectVaultItem(lastVaultItems[0]);
     }
@@ -387,6 +410,7 @@ async function refreshVaultList(options = {}) {
   if (res?.ok && Array.isArray(res?.raw?.result?.items)) {
     lastVaultItems = res.raw.result.items;
     renderVaultItems();
+    await prefetchVaultSecrets(lastVaultItems);
     if (!(vaultItemIdEl.value ?? "").trim() && lastVaultItems.length === 1) {
       selectVaultItem(lastVaultItems[0]);
     }

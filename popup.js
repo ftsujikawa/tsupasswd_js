@@ -33,6 +33,8 @@ const vaultAutoFetchSecretEl = document.getElementById("vaultAutoFetchSecret");
 const sendPayloadBtn = document.getElementById("sendPayload");
 const vaultPushBtn = document.getElementById("vaultPush");
 
+const UI_PREFS_STORAGE_KEY = "tsupasswdPopupPrefs";
+
 let lastPasskeys = [];
 let lastVaultItems = [];
 let vaultPasswordCache = {};
@@ -167,6 +169,45 @@ async function loadVaultPasswordCache() {
       resolve({});
     }
   });
+}
+
+async function loadUiPrefs() {
+  try {
+    const res = await chrome.storage.local.get([UI_PREFS_STORAGE_KEY]);
+    const prefs = res?.[UI_PREFS_STORAGE_KEY];
+    return prefs && typeof prefs === "object" ? prefs : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveUiPrefs(patch) {
+  try {
+    const current = await loadUiPrefs();
+    const next = {
+      ...(current && typeof current === "object" ? current : {}),
+      ...(patch && typeof patch === "object" ? patch : {})
+    };
+    await chrome.storage.local.set({ [UI_PREFS_STORAGE_KEY]: next });
+  } catch {}
+}
+
+async function initUiPrefs() {
+  const prefs = await loadUiPrefs();
+  try {
+    if (vaultIncludeDeletedEl) {
+      vaultIncludeDeletedEl.checked = Boolean(prefs?.vaultIncludeDeleted);
+      vaultIncludeDeletedEl.addEventListener("change", () => {
+        saveUiPrefs({ vaultIncludeDeleted: Boolean(vaultIncludeDeletedEl.checked) });
+      });
+    }
+    if (vaultAutoFetchSecretEl) {
+      vaultAutoFetchSecretEl.checked = Boolean(prefs?.vaultAutoFetchSecret);
+      vaultAutoFetchSecretEl.addEventListener("change", () => {
+        saveUiPrefs({ vaultAutoFetchSecret: Boolean(vaultAutoFetchSecretEl.checked) });
+      });
+    }
+  } catch {}
 }
 
 async function setCachedVaultPassword(itemId, password) {
@@ -746,6 +787,7 @@ try {
     }
   });
 
+  initUiPrefs();
   initListByActiveTabUrl();
 } catch (e) {
   setResult({ ok: false, error: String(e?.message ?? e) });

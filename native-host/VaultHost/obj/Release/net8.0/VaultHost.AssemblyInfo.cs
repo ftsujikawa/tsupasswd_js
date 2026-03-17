@@ -14,11 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("tsupasswd-vault-host")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-<<<<<<< HEAD
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+064cfb89ba78d3b59a1d6fee873554fc26fa56aa")]
-=======
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3bb66a98abd2886285bd9ce677375becddc9abcf")]
->>>>>>> 256d56a8dad2e11ef7b86c3c14f845b604a00cf7
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b1854232bb2bcf5f04ef676e420c19cf65301ac5")]
 [assembly: System.Reflection.AssemblyProductAttribute("tsupasswd-vault-host")]
 [assembly: System.Reflection.AssemblyTitleAttribute("tsupasswd-vault-host")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

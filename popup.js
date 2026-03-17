@@ -122,7 +122,13 @@ async function fetchVaultPasswordIntoCache(itemId) {
     requestId: `vault-get-${Date.now()}`,
   });
   const res = await sendNativeAwait(payload, "vault");
-  const password = String(res?.payload?.result?.password ?? res?.raw?.result?.password ?? "");
+  const password = String(
+    res?.payload?.result?.password ??
+      res?.payload?.result?.item?.password ??
+      res?.raw?.result?.password ??
+      res?.raw?.result?.item?.password ??
+      ""
+  );
   if (!password.trim()) {
     return { ok: false, error: "empty_password", res: res?.raw ?? res };
   }

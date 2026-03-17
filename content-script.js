@@ -144,6 +144,59 @@
       const user = String(selectedItem?.user ?? "").trim().toLowerCase();
       if (!user) return "";
 
+      const requestVaultLoginGet = (itemId) => {
+        return new Promise((resolve) => {
+          try {
+            const id = String(itemId ?? "").trim();
+            if (!id) {
+              resolve({ ok: false, error: "itemId is required" });
+              return;
+            }
+            if (!chrome?.runtime?.sendMessage) {
+              resolve({ ok: false, error: "chrome_runtime_unavailable" });
+              return;
+            }
+
+            const requestId = `cs-vault-get-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const timeoutId = setTimeout(() => {
+              resolve({ ok: false, error: "native_request_timeout", detail: "Vault host response timed out" });
+            }, 8000);
+
+            chrome.runtime.sendMessage(
+              {
+                type: "vault-request-await",
+                payload: {
+                  id: requestId,
+                  version: 1,
+                  command: "vault.login.get",
+                  payload: {
+                    itemId: id,
+                    includeSecret: true,
+                    requestId
+                  }
+                },
+                target: "vault"
+              },
+              (res) => {
+                clearTimeout(timeoutId);
+                if (chrome.runtime.lastError) {
+                  resolve({ ok: false, error: String(chrome.runtime.lastError.message ?? chrome.runtime.lastError) });
+                  return;
+                }
+                if (!res?.ok) {
+                  resolve({ ok: false, error: res?.error || "vault-request-failed", detail: res?.detail });
+                  return;
+                }
+                const native = res?.payload ?? res?.raw;
+                resolve({ ok: true, payload: native });
+              }
+            );
+          } catch (e) {
+            resolve({ ok: false, error: "vault_send_failed", detail: String(e?.message ?? e) });
+          }
+        });
+      };
+
       // WindowsApps版 tsupasswd_core.exe は vault.login.list で password を返さない。
       // そのため拡張側（popup.js）が保持する chrome.storage.local のキャッシュを優先する。
       try {
@@ -164,6 +217,19 @@
           });
           const cachedPassword = String(cache?.[itemId] ?? "");
           if (cachedPassword) return cachedPassword;
+
+          // キャッシュが無い場合は、Vaultからsecretを取得してキャッシュする。
+          // 注意: password自体はサーバ同期されないため、別環境では都度このgetが必要。
+          try {
+            const getRes = await requestVaultLoginGet(itemId);
+            const passwordFromGet = String(getRes?.payload?.result?.password ?? getRes?.payload?.result?.item?.password ?? "");
+            if (passwordFromGet) {
+              try {
+                await setCachedVaultPasswordToStorage(itemId, passwordFromGet);
+              } catch {}
+              return passwordFromGet;
+            }
+          } catch {}
         }
       } catch {}
 
